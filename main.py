@@ -32,46 +32,29 @@ OFERTAS_ESTRELLA = [
     }
 ]
 
-def enviar_via_meta_cloud(mensaje, imagen_url):
-    token = os.environ.get("WHATSAPP_TOKEN")
-    phone_id = os.environ.get("WHATSAPP_PHONE_ID")
-    # El destino puede ser tu número de prueba inicial o el destinatario/canal autorizado
-    destinatario = os.environ.get("WHATSAPP_DESTINATARIO") 
+def enviar_a_textmebot(mensaje, imagen_url):
+    phone = os.environ.get("WHATSAPP_PHONE")
+    apikey = os.environ.get("WHATSAPP_APIKEY")
 
-    if not token or not phone_id or not destinatario:
-        print("⚠️ Faltan credenciales de la Cloud API de Meta en los Secrets.")
+    if not phone or not apikey:
+        print("⚠️ Faltan las credenciales en los Secrets.")
         return
 
-    url = f"https://graph.facebook.com/v18.0/{phone_id}/messages"
-    
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-
-    # Enviamos primero la imagen con texto descriptivo mediante la Cloud API oficial
-    payload = {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": destinatario,
-        "type": "image",
-        "image": {
-            "link": imagen_url,
-            "caption": mensaje
-        }
-    }
+    # Usamos la estructura que procesa TextMeBot de forma directa
+    texto_completo = f"{mensaje}\n\n📷 {imagen_url}"
+    url = f"https://api.textmebot.com/send.php?recipient={phone}&apikey={apikey}&text={requests.utils.quote(texto_completo)}"
 
     try:
-        res = requests.post(url, json=payload, headers=headers, timeout=15)
+        res = requests.get(url, timeout=15)
         if res.status_code == 200:
-            print("✅ ¡Oferta e imagen publicadas con éxito mediante la API oficial de Meta!")
+            print("✅ ¡Oferta enviada con éxito por TextMeBot!")
         else:
-            print(f"❌ Error en la API de Meta: Código {res.status_code} - {res.text}")
+            print(f"❌ Error al enviar: Código {res.status_code}")
     except Exception as e:
-        print(f"❌ Excepción en el envío: {str(e)}")
+        print(f"❌ Excepción: {str(e)}")
 
 if __name__ == "__main__":
-    print("--- PUBLICANDO OFERTA GRATUITA (META CLOUD API) ---")
+    print("--- ENVIANDO OFERTA AUTOMÁTICA ---")
     
     item = random.choice(OFERTAS_ESTRELLA)
     titulo = item["titulo"]
@@ -88,4 +71,4 @@ if __name__ == "__main__":
     )
 
     print(mensaje)
-    enviar_via_meta_cloud(mensaje, imagen_url)
+    enviar_a_textmebot(mensaje, imagen_url)
