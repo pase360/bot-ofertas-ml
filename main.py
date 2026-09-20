@@ -5,95 +5,83 @@ import requests
 AFILIADO_TAG = "jlvidela"
 LINK_CANAL_WHATSAPP = "https://whatsapp.com/channel/0029VbDkrupBA1f1PtP0nk0V"
 
-CATEGORIAS_CON_IMAGENES = [
-    {
-        "titulo": "Smartphones y Celulares Libres",
-        "url": "https://www.mercadolibre.com.ar/celulares-telefonos/smartphones",
-        "imagen": "https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?q=80&w=1000&auto=format&fit=crop"
-    },
-    {
-        "titulo": "Notebooks y Laptops en Oferta",
-        "url": "https://www.mercadolibre.com.ar/computacion/notebooks-PCs",
-        "imagen": "https://images.unsplash.com/photo-1496181133206-80ce9b88a853?q=80&w=1000&auto=format&fit=crop"
-    },
-    {
-        "titulo": "Auriculares y Audio Inalámbrico",
-        "url": "https://www.mercadolibre.com.ar/audio/auriculares",
-        "imagen": "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?q=80&w=1000&auto=format&fit=crop"
-    },
-    {
-        "titulo": "Zapatillas y Calzado Deportivo",
-        "url": "https://www.mercadolibre.com.ar/zapatillas",
-        "imagen": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=1000&auto=format&fit=crop"
-    },
-    {
-        "titulo": "Smart TVs y Pantallas 4K",
-        "url": "https://www.mercadolibre.com.ar/televisores/televisores",
-        "imagen": "https://images.unsplash.com/photo-1593359677879-a4bb92f829d1?q=80&w=1000&auto=format&fit=crop"
-    },
-    {
-        "titulo": "Herramientas y Construcción",
-        "url": "https://www.mercadolibre.com.ar/herramientas",
-        "imagen": "https://images.unsplash.com/photo-1504148455328-c376907d081c?q=80&w=1000&auto=format&fit=crop"
-    },
-    {
-        "titulo": "Electrodomésticos para el Hogar",
-        "url": "https://www.mercadolibre.com.ar/electrodomesticos",
-        "imagen": "https://images.unsplash.com/photo-1556911220-e15b29be8c8f?q=80&w=1000&auto=format&fit=crop"
-    },
-    {
-        "titulo": "Consolas y Videojuegos",
-        "url": "https://www.mercadolibre.com.ar/video-juegos/consolas",
-        "imagen": "https://images.unsplash.com/photo-1612287230202-1ff1d85d1bdf?q=80&w=1000&auto=format&fit=crop"
-    },
-    {
-        "titulo": "Perfumes e Importados",
-        "url": "https://www.mercadolibre.com.ar/belleza-y-cuidado-personal/perfumes",
-        "imagen": "https://images.unsplash.com/photo-1523293182086-7651a899d37f?q=80&w=1000&auto=format&fit=crop"
-    },
-    {
-        "titulo": "Deportes y Fitness",
-        "url": "https://www.mercadolibre.com.ar/deportes-y-fitness",
-        "imagen": "https://images.unsplash.com/photo-1517838277536-f5f99be501cd?q=80&w=1000&auto=format&fit=crop"
-    }
-]
+def buscar_oferta_real_meli():
+    # Palabras clave de productos con alta rotación y conversión en Argentina
+    busquedas = ["smartphone libre", "notebook", "auriculares inalambricos", "zapatillas deportivas", "smart tv 4k", "perfume importado", "consola playstation"]
+    q = random.choice(busquedas)
+    
+    # Consultamos la API de Mercado Libre ordenada por cantidad de ventas (los que más se venden)
+    url = f"https://api.mercadolibre.com/sites/MLA/search?q={q}&sort=sold_quantity"
+    
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            results = data.get("results", [])
+            if results:
+                # Tomamos uno de los primeros puestos (alta demanda)
+                item = random.choice(results[:5])
+                titulo = item.get("title")
+                precio = item.get("price")
+                
+                # Formateamos el precio en pesos argentinos
+                precio_formateado = f"${precio:,.0f}".replace(",", ".") if precio else "Consultar"
+                
+                permalink = item.get("permalink")
+                # Agregamos tu tag de afiliado al enlace exacto del producto
+                link_afiliado = f"{permalink}?tag={AFILIADO_TAG}"
+                
+                # Obtenemos la imagen oficial del producto y mejoramos la calidad a versión grande (-O.jpg)
+                imagen = item.get("thumbnail", "").replace("http://", "https://")
+                if "-I.jpg" in imagen:
+                    imagen = imagen.replace("-I.jpg", "-O.jpg")
+                elif "-M.jpg" in imagen:
+                    imagen = imagen.replace("-M.jpg", "-O.jpg")
+                    
+                return titulo, precio_formateado, link_afiliado, imagen
+    except Exception as e:
+        print(f"⚠️ Error al conectar con la API de Mercado Libre: {e}")
+        
+    return None
 
 def enviar_a_whatsapp(mensaje, imagen_url):
     phone = os.environ.get("WHATSAPP_PHONE")
     apikey = os.environ.get("WHATSAPP_APIKEY")
 
     if not phone or not apikey:
-        print("⚠️ No se encontraron las credenciales de WhatsApp en los Secrets de GitHub.")
+        print("⚠️ Faltan las credenciales de WhatsApp en los Secrets.")
         return
 
-    # Armamos el texto completo primero para evitar problemas de sintaxis con las barras en la f-string
-    texto_completo = mensaje + "\n\n📷 " + imagen_url
+    # Enviamos el mensaje estructurado con el link de la imagen real
+    texto_completo = f"{mensaje}\n\n📷 {imagen_url}"
     url = f"https://api.textmebot.com/send.php?recipient={phone}&apikey={apikey}&text={requests.utils.quote(texto_completo)}"
 
     try:
         res = requests.get(url, timeout=10)
         if res.status_code == 200:
-            print("✅ ¡Oferta e imagen enviadas a WhatsApp con éxito!")
+            print("✅ ¡Oferta real de Mercado Libre enviada con éxito!")
         else:
             print(f"❌ Error al enviar a WhatsApp: Código {res.status_code}")
     except Exception as e:
         print(f"❌ Excepción en el envío: {str(e)}")
 
 if __name__ == "__main__":
-    item = random.choice(CATEGORIAS_CON_IMAGENES)
-    titulo = item["titulo"]
-    link_afiliado = f"{item['url']}?tag={AFILIADO_TAG}"
-    imagen_url = item["imagen"]
-
-    mensaje = (
-        f"🔥 *OFERTA DESTACADA DE HOY*\n\n"
-        f"📦 *{titulo}*\n\n"
-        f"🛒 *Mirá los descuentos acá:* {link_afiliado}\n\n"
-        f"📢 *Sumate o compartí el canal:* {LINK_CANAL_WHATSAPP}"
-    )
-
-    print("--- PROCESANDO OFERTA ---")
-    print(mensaje)
+    print("--- BUSCANDO PRODUCTO CON ALTA INTENCIÓN DE VENTA ---")
     
-    # Dispara el envío real
-    enviar_a_whatsapp(mensaje, imagen_url)
+    producto = buscar_oferta_real_meli()
+    
+    if producto:
+        titulo, precio, link_afiliado, imagen_url = producto
+        
+        mensaje = (
+            f"🔥 *OFERTA DESTACADA DE MERCADO LIBRE*\n\n"
+            f"📦 *{titulo}*\n\n"
+            f"💰 *Precio:* {precio}\n\n"
+            f"🛒 *Comprá acá con descuento:* {link_afiliado}\n\n"
+            f"📢 *Sumate o compartí el canal:* {LINK_CANAL_WHATSAPP}"
+        )
+
+        print(mensaje)
+        enviar_a_whatsapp(mensaje, imagen_url)
+    else:
+        print("❌ No se pudo obtener ningún producto en esta ejecución.")
