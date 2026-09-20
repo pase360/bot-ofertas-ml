@@ -29,43 +29,49 @@ OFERTAS_ESTRELLA = [
         "precio": "$89.999",
         "url": "https://listado.mercadolibre.com.ar/zapatillas-deportivas",
         "imagen": "https://http2.mlstatic.com/D_NQ_NP_624893-MLA71548122910_092023-O.jpg"
-    },
-    {
-        "titulo": "Smart TV LED 4K UHD con Envíos Gratis",
-        "precio": "$429.999",
-        "url": "https://listado.mercadolibre.com.ar/televisores/smart-tv",
-        "imagen": "https://http2.mlstatic.com/D_NQ_NP_789451-MLA70215489123_062023-O.jpg"
-    },
-    {
-        "titulo": "Consolas y Videojuegos en Oferta",
-        "precio": "$599.999",
-        "url": "https://listado.mercadolibre.com.ar/videojuegos/consolas",
-        "imagen": "https://http2.mlstatic.com/D_NQ_NP_912451-MLA70215489123_062023-O.jpg"
     }
 ]
 
-def enviar_a_whatsapp(mensaje, imagen_url):
-    phone = os.environ.get("WHATSAPP_PHONE")
-    apikey = os.environ.get("WHATSAPP_APIKEY")
+def enviar_via_meta_cloud(mensaje, imagen_url):
+    token = os.environ.get("WHATSAPP_TOKEN")
+    phone_id = os.environ.get("WHATSAPP_PHONE_ID")
+    # El destino puede ser tu número de prueba inicial o el destinatario/canal autorizado
+    destinatario = os.environ.get("WHATSAPP_DESTINATARIO") 
 
-    if not phone or not apikey:
-        print("⚠️ Faltan las credenciales de WhatsApp en los Secrets.")
+    if not token or not phone_id or not destinatario:
+        print("⚠️ Faltan credenciales de la Cloud API de Meta en los Secrets.")
         return
 
-    # Usamos el parámetro 'image' para que la imagen se vea directamente de forma nativa
-    url = f"https://api.textmebot.com/send.php?recipient={phone}&apikey={apikey}&text={requests.utils.quote(mensaje)}&image={requests.utils.quote(imagen_url)}"
+    url = f"https://graph.facebook.com/v18.0/{phone_id}/messages"
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    # Enviamos primero la imagen con texto descriptivo mediante la Cloud API oficial
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": destinatario,
+        "type": "image",
+        "image": {
+            "link": imagen_url,
+            "caption": mensaje
+        }
+    }
 
     try:
-        res = requests.get(url, timeout=15)
+        res = requests.post(url, json=payload, headers=headers, timeout=15)
         if res.status_code == 200:
-            print("✅ ¡Oferta publicada con éxito en el canal!")
+            print("✅ ¡Oferta e imagen publicadas con éxito mediante la API oficial de Meta!")
         else:
-            print(f"❌ Error al enviar a WhatsApp: Código {res.status_code}")
+            print(f"❌ Error en la API de Meta: Código {res.status_code} - {res.text}")
     except Exception as e:
         print(f"❌ Excepción en el envío: {str(e)}")
 
 if __name__ == "__main__":
-    print("--- PUBLICANDO NUEVA OFERTA AUTOMÁTICA ---")
+    print("--- PUBLICANDO OFERTA GRATUITA (META CLOUD API) ---")
     
     item = random.choice(OFERTAS_ESTRELLA)
     titulo = item["titulo"]
@@ -82,4 +88,4 @@ if __name__ == "__main__":
     )
 
     print(mensaje)
-    enviar_a_whatsapp(mensaje, imagen_url)
+    enviar_via_meta_cloud(mensaje, imagen_url)
