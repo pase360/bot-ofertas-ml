@@ -1,9 +1,10 @@
+import os
 import random
+import requests
 
 AFILIADO_TAG = "jlvidela"
 LINK_CANAL_WHATSAPP = "https://whatsapp.com/channel/0029VbDkrupBA1f1PtP0nk0V"
 
-# Catálogo masivo con categorías, enlaces de afiliado e imágenes de alta calidad
 CATEGORIAS_CON_IMAGENES = [
     {
         "titulo": "Smartphones y Celulares Libres",
@@ -57,7 +58,27 @@ CATEGORIAS_CON_IMAGENES = [
     }
 ]
 
-def obtener_oferta():
+def enviar_a_whatsapp(mensaje, imagen_url):
+    phone = os.environ.get("WHATSAPP_PHONE")
+    apikey = os.environ.get("WHATSAPP_APIKEY")
+
+    if not phone or not apikey:
+        print("⚠️ No se encontraron las credenciales de WhatsApp en los Secrets de GitHub.")
+        return
+
+    # Envío mediante API configurada con texto e imagen
+    url = f"https://api.textmebot.com/send.php?recipient={phone}&apikey={apikey}&text={requests.utils.quote(mensaje + '\n\n📸 ' + imagen_url)}"
+
+    try:
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            print("✅ ¡Oferta e imagen enviadas a WhatsApp con éxito!")
+        else:
+            print(f"❌ Error al enviar a WhatsApp: Código {res.status_code}")
+    except Exception as e:
+        print(f"❌ Excepción en el envío: {str(e)}")
+
+if __name__ == "__main__":
     item = random.choice(CATEGORIAS_CON_IMAGENES)
     titulo = item["titulo"]
     link_afiliado = f"{item['url']}?tag={AFILIADO_TAG}"
@@ -69,12 +90,9 @@ def obtener_oferta():
         f"🛒 *Mirá los descuentos acá:* {link_afiliado}\n\n"
         f"📢 *Sumate o compartí el canal:* {LINK_CANAL_WHATSAPP}"
     )
-    
-    return mensaje, imagen_url
 
-if __name__ == "__main__":
-    mensaje, imagen = obtener_oferta()
-    print("--- MENSAJE PARA WHATSAPP ---")
+    print("--- PROCESANDO OFERTA ---")
     print(mensaje)
-    print(f"\n--- IMAGEN ASOCIADA ---")
-    print(imagen)
+    
+    # Dispara el envío real
+    enviar_a_whatsapp(mensaje, imagen_url)
