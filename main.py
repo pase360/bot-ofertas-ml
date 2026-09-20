@@ -5,33 +5,39 @@ AFILIADO_TAG = "jlvidela"
 LINK_CANAL_WHATSAPP = "https://whatsapp.com/channel/0029VbDkrupBA1f1PtP0nk0V"
 
 CATEGORIAS = [
-    "MLA1051",  # Celulares y Smartphones
-    "MLA1648",  # Computación y Laptops
+    "MLA1051",  # Celulares
+    "MLA1648",  # Computación
     "MLA5726",  # Electrodomésticos
-    "MLA1276",  # Deportes y Calzado
+    "MLA1276",  # Deportes
     "MLA4071",  # Herramientas
-    "MLA1144",  # Consolas y Videojuegos
-    "MLA1574",  # Hogar y Muebles
-    "MLA1246",  # Belleza y Cuidado Personal
-    "MLA1039",  # Cámaras y Accesorios
-    "MLA1182",  # Instrumentos Musicales
+    "MLA1144",  # Consolas
+    "MLA1574",  # Hogar
+    "MLA1246",  # Belleza
+    "MLA1039",  # Cámaras
+    "MLA1182",  # Música
 ]
 
 def obtener_oferta():
     for cat_id in CATEGORIAS:
-        url = f"https://api.mercadolibre.com/sites/MLA/search?category={cat_id}&sort=relevance"
+        # Buscamos los primeros 30 productos de la categoría
+        url = f"https://api.mercadolibre.com/sites/MLA/search?category={cat_id}&limit=30"
         res = requests.get(url)
         if res.status_code == 200:
             datos = res.json()
             for item in datos.get("results", []):
                 precio_orig = item.get("original_price")
                 precio_act = item.get("price")
-                if precio_orig and precio_act < precio_orig:
+                
+                # Verificamos si existe descuento real
+                if precio_orig and precio_act and precio_act < precio_orig:
                     descuento = int(((precio_orig - precio_act) / precio_orig) * 100)
-                    if descuento >= 20:
+                    
+                    # Filtro flexibilizado a partir de 10% de descuento
+                    if descuento >= 10:
                         titulo = item.get("title")
                         permalink = item.get("permalink")
                         link_afiliado = f"{permalink}?tag={AFILIADO_TAG}"
+                        
                         mensaje = (
                             f"🔥 *{descuento}% DE DESCUENTO*\n\n"
                             f"📦 *{titulo}*\n\n"
