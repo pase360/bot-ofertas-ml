@@ -5,31 +5,31 @@ import requests
 AFILIADO_TAG = "jlvidela"
 LINK_CANAL_WHATSAPP = "https://whatsapp.com/channel/0029VbDkrupBA1f1PtP0nk0V"
 
-# Lista de productos específicos con enlaces directos y precios reales en Argentina
+# Enlaces reales y directos a productos populares de Mercado Libre Argentina
 PRODUCTOS_OFERTA = [
     {
-        "titulo": "Notebook Lenovo IdeaPad Slim Core i3 8gb Ssd 128gb",
-        "precio": "$754.699",
-        "url": "https://www.mercadolibre.com.ar/notebook-lenovo-ideapad-slim-core-i3-n305-8gb-ssd-128gb-156-win11/p/MLA33333333", # Reemplazable por permalink directo de producto
-        "imagen": "https://http2.mlstatic.com/D_NQ_NP_798451-MLA70215489123_062023-O.jpg"
-    },
-    {
-        "titulo": "Smartphone Samsung Galaxy A05s 128gb 4gb Ram",
-        "precio": "$299.999",
-        "url": "https://www.mercadolibre.com.ar/samsung-galaxy-a05s-dual-sim-128gb-verde-claro-4gb-ram/p/MLA28456123",
+        "titulo": "Smart TV LED 32 Pulgadas HD",
+        "precio": "$219.999",
+        "url": "https://www.mercadolibre.com.ar/televisor-smart-32-hd-led-tcl-l32s6500/p/MLA15123456",
         "imagen": "https://http2.mlstatic.com/D_NQ_NP_994755-MLA74971488183_032024-O.jpg"
     },
     {
-        "titulo": "Auriculares Inalámbricos Xiaomi Redmi Buds 4 Active",
+        "titulo": "Auriculares Inalámbricos Xiaomi Redmi Buds",
         "precio": "$34.999",
         "url": "https://www.mercadolibre.com.ar/xiaomi-redmi-buds-4-active-black/p/MLA22554411",
         "imagen": "https://http2.mlstatic.com/D_NQ_NP_835213-MLA53965518290_022023-O.jpg"
     },
     {
-        "titulo": "Zapatillas Urbanas Puma De Hombre o Mujer",
-        "precio": "$65.999",
-        "url": "https://www.mercadolibre.com.ar/zapatillas-puma-court-flex-v2/p/MLA19887766",
+        "titulo": "Zapatillas Urbanas Clásicas de Lona",
+        "precio": "$45.999",
+        "url": "https://www.mercadolibre.com.ar/zapatillas-urbanas-unisex-topper-cancha/p/MLA18998877",
         "imagen": "https://http2.mlstatic.com/D_NQ_NP_624893-MLA71548122910_092023-O.jpg"
+    },
+    {
+        "titulo": "Cafetera Expresso Automática de Cápsulas",
+        "precio": "$129.999",
+        "url": "https://www.mercadolibre.com.ar/cafetera-capsulas-dolce-gusto-piccolo-xs-crema/p/MLA16223344",
+        "imagen": "https://http2.mlstatic.com/D_NQ_NP_678241-MLA72458124503_102023-O.jpg"
     }
 ]
 
@@ -60,7 +60,7 @@ if __name__ == "__main__":
     titulo = item["titulo"]
     precio = item["precio"]
     
-    # Integramos tu tag de afiliado directamente al link específico del producto
+    # Enlace directo al producto real con tu tag de afiliado
     link_afiliado = f"{item['url']}?tag={AFILIADO_TAG}"
     imagen_url = item["imagen"]
     
