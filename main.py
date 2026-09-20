@@ -1,46 +1,18 @@
-import os
 import requests
 import random
 
 AFILIADO_TAG = "jlvidela"
 LINK_CANAL_WHATSAPP = "https://whatsapp.com/channel/0029VbDkrupBA1f1PtP0nk0V"
 
-# Términos de búsqueda populares que siempre traen miles de ofertas
-BUSQUEDAS = ["ofertas", "descuento", "tecnologia", "celulares", "notebook", "herramientas"]
-
-def obtener_access_token():
-    client_id = os.environ.get("MELI_CLIENT_ID")
-    client_secret = os.environ.get("MELI_CLIENT_SECRET")
-    
-    if not client_id or not client_secret:
-        return None
-
-    url = "https://api.mercadolibre.com/oauth/token"
-    payload = {
-        "grant_type": "client_credentials",
-        "client_id": client_id,
-        "client_secret": client_secret
-    }
-    headers = {"accept": "application/json", "content-type": "application/x-www-form-urlencoded"}
-
-    try:
-        res = requests.post(url, data=payload, headers=headers, timeout=10)
-        if res.status_code == 200:
-            return res.json().get("access_token")
-    except Exception:
-        pass
-    return None
+BUSQUEDAS = ["ofertas", "tecnologia", "celulares", "notebook", "herramientas", "electrodomesticos"]
 
 def obtener_oferta():
-    token = obtener_access_token()
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json"
     }
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
 
     query = random.choice(BUSQUEDAS)
-    # Búsqueda directa por palabra clave
     url = f"https://api.mercadolibre.com/sites/MLA/search?q={query}"
 
     try:
@@ -49,8 +21,11 @@ def obtener_oferta():
             results = res.json().get("results", [])
             
             if results:
-                # Tomamos uno al azar entre los primeros 20 resultados
-                data = random.choice(results[:20])
+                # Priorizar productos que tengan descuento explícito
+                con_descuento = [item for item in results if item.get("original_price") and item.get("original_price") > item.get("price")]
+                items_a_elegir = con_descuento if con_descuento else results
+                
+                data = random.choice(items_a_elegir[:15])
                 
                 titulo = data.get("title")
                 precio_act = data.get("price")
@@ -81,7 +56,7 @@ def obtener_oferta():
     except Exception as e:
         return f"Error en la consulta: {str(e)}"
 
-    return "No se encontraron publicaciones para la búsqueda."
+    return "No se encontraron publicaciones."
 
 if __name__ == "__main__":
     oferta_msg = obtener_oferta()
