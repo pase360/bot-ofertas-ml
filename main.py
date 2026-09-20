@@ -1,10 +1,10 @@
+import os
 import requests
 import random
 
 AFILIADO_TAG = "jlvidela"
 LINK_CANAL_WHATSAPP = "https://whatsapp.com/channel/0029VbDkrupBA1f1PtP0nk0V"
 
-# Categorías populares en Argentina
 CATEGORIAS = [
     "MLA1051",  # Celulares y Smartphones
     "MLA1648",  # Computación
@@ -14,28 +14,55 @@ CATEGORIAS = [
     "MLA1144",  # Consolas y Videojuegos
 ]
 
+def obtener_access_token():
+    client_id = os.environ.get("MELI_CLIENT_ID")
+    client_secret = os.environ.get("MELI_CLIENT_SECRET")
+
+    if not client_id or not client_secret:
+        return None
+
+    url = "https://api.mercadolibre.com/oauth/token"
+    payload = {
+        "grant_type": "client_credentials",
+        "client_id": client_id,
+        "client_secret": client_secret
+    }
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+
+    try:
+        res = requests.post(url, data=payload, headers=headers, timeout=10)
+        if res.status_code == 200:
+            return res.json().get("access_token")
+    except Exception:
+        pass
+    return None
+
 def obtener_oferta():
+    token = obtener_access_token()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
+    
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
 
     cat = random.choice(CATEGORIAS)
-    # Endpoint de productos destacados por categoría (Endpoint oficial pública)
     url_highlights = f"https://api.mercadolibre.com/highlights/MLA/category/{cat}"
 
     try:
         res = requests.get(url_highlights, headers=headers, timeout=10)
-        
+
         if res.status_code == 200:
             content = res.json().get("content", [])
-            # Filtrar solo elementos de tipo producto
             item_ids = [item["id"] for item in content if item.get("type") == "item"]
-            
+
             if item_ids:
                 item_id = random.choice(item_ids[:10])
-                # Consultar detalles del producto directamente por su ID
                 res_item = requests.get(f"https://api.mercadolibre.com/items/{item_id}", headers=headers, timeout=10)
-                
+
                 if res_item.status_code == 200:
                     data = res_item.json()
                     titulo = data.get("title")
