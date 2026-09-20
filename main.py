@@ -5,30 +5,30 @@ import requests
 AFILIADO_TAG = "jlvidela"
 LINK_CANAL_WHATSAPP = "https://whatsapp.com/channel/0029VbDkrupBA1f1PtP0nk0V"
 
-# Enlaces reales y directos a productos populares de Mercado Libre Argentina
-PRODUCTOS_OFERTA = [
+# Enlaces de búsquedas directas y oficiales (¡nunca expiran y siempre tienen stock!)
+OFERTAS_ESTABLES = [
     {
-        "titulo": "Smart TV LED 32 Pulgadas HD",
-        "precio": "$219.999",
-        "url": "https://www.mercadolibre.com.ar/televisor-smart-32-hd-led-tcl-l32s6500/p/MLA15123456",
+        "titulo": "Smart TVs LED en Oferta y Cuotas",
+        "precio": "Ver precios y modelos actualizados",
+        "url": "https://listado.mercadolibre.com.ar/televisores/smart-tv/_NoIndex_True",
         "imagen": "https://http2.mlstatic.com/D_NQ_NP_994755-MLA74971488183_032024-O.jpg"
     },
     {
-        "titulo": "Auriculares Inalámbricos Xiaomi Redmi Buds",
-        "precio": "$34.999",
-        "url": "https://www.mercadolibre.com.ar/xiaomi-redmi-buds-4-active-black/p/MLA22554411",
+        "titulo": "Auriculares Inalámbricos Más Vendidos",
+        "precio": "Ver precios y modelos actualizados",
+        "url": "https://listado.mercadolibre.com.ar/audio/auriculares-inalambricos/_NoIndex_True",
         "imagen": "https://http2.mlstatic.com/D_NQ_NP_835213-MLA53965518290_022023-O.jpg"
     },
     {
-        "titulo": "Zapatillas Urbanas Clásicas de Lona",
-        "precio": "$45.999",
-        "url": "https://www.mercadolibre.com.ar/zapatillas-urbanas-unisex-topper-cancha/p/MLA18998877",
+        "titulo": "Zapatillas Deportivas Primeras Marcas",
+        "precio": "Ver precios y modelos actualizados",
+        "url": "https://listado.mercadolibre.com.ar/zapatillas-deportivas/_NoIndex_True",
         "imagen": "https://http2.mlstatic.com/D_NQ_NP_624893-MLA71548122910_092023-O.jpg"
     },
     {
-        "titulo": "Cafetera Expresso Automática de Cápsulas",
-        "precio": "$129.999",
-        "url": "https://www.mercadolibre.com.ar/cafetera-capsulas-dolce-gusto-piccolo-xs-crema/p/MLA16223344",
+        "titulo": "Notebooks y Laptops con Descuento",
+        "precio": "Ver precios y modelos actualizados",
+        "url": "https://listado.mercadolibre.com.ar/computacion/notebooks/_NoIndex_True",
         "imagen": "https://http2.mlstatic.com/D_NQ_NP_678241-MLA72458124503_102023-O.jpg"
     }
 ]
@@ -47,28 +47,28 @@ def enviar_a_textmebot(mensaje, imagen_url):
     try:
         res = requests.get(url, timeout=15)
         if res.status_code == 200:
-            print("✅ ¡Oferta de producto específico enviada con éxito!")
+            print("✅ ¡Oferta estable enviada con éxito!")
         else:
             print(f"❌ Error al enviar: Código {res.status_code}")
     except Exception as e:
         print(f"❌ Excepción: {str(e)}")
 
 if __name__ == "__main__":
-    print("--- GENERANDO OFERTA DE PRODUCTO ESPECÍFICO ---")
+    print("--- GENERANDO OFERTA ESTABLE ---")
     
-    item = random.choice(PRODUCTOS_OFERTA)
+    item = random.choice(OFERTAS_ESTABLES)
     titulo = item["titulo"]
     precio = item["precio"]
     
-    # Enlace directo al producto real con tu tag de afiliado
+    # Enlace seguro con tu etiqueta de afiliado integrada
     link_afiliado = f"{item['url']}?tag={AFILIADO_TAG}"
     imagen_url = item["imagen"]
     
     mensaje = (
-        f"🔥 *¡OFERTA IMPERDIBLE EN MERCADO LIBRE!* 🔥\n\n"
+        f"🔥 *¡OFERTA DESTACADA EN MERCADO LIBRE!* 🔥\n\n"
         f"📦 *{titulo}*\n\n"
-        f"💰 *Precio Oferta:* {precio}\n\n"
-        f"🛒 *¡Comprá al mejor precio acá:* {link_afiliado}\n\n"
+        f"💰 *Estado:* {precio}\n\n"
+        f"🛒 *Mirá las opciones y comprá acá:* {link_afiliado}\n\n"
         f"📢 *Sumate al canal para más ofertas:* {LINK_CANAL_WHATSAPP}"
     )
 
