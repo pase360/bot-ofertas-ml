@@ -5,22 +5,14 @@ import random
 AFILIADO_TAG = "jlvidela"
 LINK_CANAL_WHATSAPP = "https://whatsapp.com/channel/0029VbDkrupBA1f1PtP0nk0V"
 
-# Categorías con ofertas permanentes
-CATEGORIAS = [
-    "MLA1051",  # Celulares
-    "MLA1648",  # Computación
-    "MLA5726",  # Electrodomésticos
-    "MLA1276",  # Deportes
-    "MLA4071",  # Herramientas
-    "MLA1144",  # Consolas
-]
+# Términos de búsqueda populares que siempre traen miles de ofertas
+BUSQUEDAS = ["ofertas", "descuento", "tecnologia", "celulares", "notebook", "herramientas"]
 
 def obtener_access_token():
     client_id = os.environ.get("MELI_CLIENT_ID")
     client_secret = os.environ.get("MELI_CLIENT_SECRET")
     
     if not client_id or not client_secret:
-        print("⚠️ No se encontraron las credenciales MELI en el entorno.")
         return None
 
     url = "https://api.mercadolibre.com/oauth/token"
@@ -35,10 +27,8 @@ def obtener_access_token():
         res = requests.post(url, data=payload, headers=headers, timeout=10)
         if res.status_code == 200:
             return res.json().get("access_token")
-        else:
-            print(f"Error autenticando ({res.status_code}): {res.text}")
-    except Exception as e:
-        print(f"Excepción al autenticar: {e}")
+    except Exception:
+        pass
     return None
 
 def obtener_oferta():
@@ -49,23 +39,18 @@ def obtener_oferta():
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
-    cat = random.choice(CATEGORIAS)
-    # Usamos el endpoint de búsqueda directa por categoría ordenado por relevancia/descuentos
-    url = f"https://api.mercadolibre.com/sites/MLA/search?category={cat}&sort=relevance"
+    query = random.choice(BUSQUEDAS)
+    # Búsqueda directa por palabra clave
+    url = f"https://api.mercadolibre.com/sites/MLA/search?q={query}"
 
     try:
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
             results = res.json().get("results", [])
             
-            # Filtramos aquellos productos que tengan precio original mayor al actual (descuento real)
-            ofertas = [item for item in results if item.get("original_price") and item.get("original_price") > item.get("price")]
-            
-            # Si no encontramos con descuento explícito en los primeros resultados, tomamos cualquier producto destacado
-            items_a_elegir = ofertas if ofertas else results
-            
-            if items_a_elegir:
-                data = random.choice(items_a_elegir[:15])
+            if results:
+                # Tomamos uno al azar entre los primeros 20 resultados
+                data = random.choice(results[:20])
                 
                 titulo = data.get("title")
                 precio_act = data.get("price")
@@ -91,10 +76,12 @@ def obtener_oferta():
                         f"🛒 *Comprar en Mercado Libre:* {link_afiliado}\n\n"
                         f"📢 *Sumate o compartí el canal:* {LINK_CANAL_WHATSAPP}"
                     )
+        else:
+            return f"Error API Mercado Libre: Status {res.status_code}"
     except Exception as e:
         return f"Error en la consulta: {str(e)}"
 
-    return "No se pudieron obtener productos."
+    return "No se encontraron publicaciones para la búsqueda."
 
 if __name__ == "__main__":
     oferta_msg = obtener_oferta()
