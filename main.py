@@ -66,8 +66,9 @@ def enviar_a_whatsapp(mensaje, imagen_url):
         print("⚠️ No se encontraron las credenciales de WhatsApp en los Secrets de GitHub.")
         return
 
-    # Envío mediante API configurada con texto e imagen
-    url = f"https://api.textmebot.com/send.php?recipient={phone}&apikey={apikey}&text={requests.utils.quote(mensaje + '\n\n📸 ' + imagen_url)}"
+    # Armamos el texto completo primero para evitar problemas de sintaxis con las barras en la f-string
+    texto_completo = mensaje + "\n\n📷 " + imagen_url
+    url = f"https://api.textmebot.com/send.php?recipient={phone}&apikey={apikey}&text={requests.utils.quote(texto_completo)}"
 
     try:
         res = requests.get(url, timeout=10)
