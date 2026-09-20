@@ -24,4 +24,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Buscar y procesar ofertas
+        env:
+          MELI_CLIENT_ID: ${{ secrets.MELI_CLIENT_ID }}
+          MELI_CLIENT_SECRET: ${{ secrets.MELI_CLIENT_SECRET }}
         run: python main.py
