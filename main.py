@@ -1,3 +1,4 @@
+import os
 import requests
 import random
 
@@ -14,61 +15,86 @@ CATEGORIAS = [
     "MLA1144",  # Consolas
 ]
 
-def obtener_oferta():
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+def obtener_access_token():
+    client_id = os.environ.get("MELI_CLIENT_ID")
+    client_secret = os.environ.get("MELI_CLIENT_SECRET")
+    
+    if not client_id or not client_secret:
+        print("⚠️ No se encontraron las credenciales MELI en el entorno.")
+        return None
+
+    url = "https://api.mercadolibre.com/oauth/token"
+    payload = {
+        "grant_type": "client_credentials",
+        "client_id": client_id,
+        "client_secret": client_secret
     }
-    
-    # Elegimos una categoría al azar
+    headers = {"accept": "application/json", "content-type": "application/x-www-form-urlencoded"}
+
+    try:
+        res = requests.post(url, data=payload, headers=headers, timeout=10)
+        if res.status_code == 200:
+            return res.json().get("access_token")
+        else:
+            print(f"Error autenticando ({res.status_code}): {res.text}")
+    except Exception as e:
+        print(f"Excepción al autenticar: {e}")
+    return None
+
+def obtener_oferta():
+    token = obtener_access_token()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
     cat = random.choice(CATEGORIAS)
-    url = f"https://api.mercadolibre.com/highlights/MLA/category/{cat}"
-    
+    # Usamos el endpoint de búsqueda directa por categoría ordenado por relevancia/descuentos
+    url = f"https://api.mercadolibre.com/sites/MLA/search?category={cat}&sort=relevance"
+
     try:
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
-            content = res.json().get("content", [])
-            # Filtramos solo los ítems individuales
-            items = [item for item in content if item.get("type") == "item"]
+            results = res.json().get("results", [])
             
-            if items:
-                # Elegimos una oferta al azar dentro de los destacados
-                item_elegido = random.choice(items[:10])
-                item_id = item_elegido.get("id")
+            # Filtramos aquellos productos que tengan precio original mayor al actual (descuento real)
+            ofertas = [item for item in results if item.get("original_price") and item.get("original_price") > item.get("price")]
+            
+            # Si no encontramos con descuento explícito en los primeros resultados, tomamos cualquier producto destacado
+            items_a_elegir = ofertas if ofertas else results
+            
+            if items_a_elegir:
+                data = random.choice(items_a_elegir[:15])
                 
-                # Consultamos el detalle del producto específico
-                url_item = f"https://api.mercadolibre.com/items/{item_id}"
-                res_item = requests.get(url_item, headers=headers, timeout=10)
-                
-                if res_item.status_code == 200:
-                    data = res_item.json()
-                    titulo = data.get("title")
-                    precio_act = data.get("price")
-                    precio_orig = data.get("original_price")
-                    permalink = data.get("permalink")
-                    link_afiliado = f"{permalink}?tag={AFILIADO_TAG}"
-                    
-                    if precio_orig and precio_act and precio_orig > precio_act:
-                        descuento = int(((precio_orig - precio_act) / precio_orig) * 100)
-                        return (
-                            f"🔥 *{descuento}% DE DESCUENTO*\n\n"
-                            f"📦 *{titulo}*\n\n"
-                            f"❌ Antes: ~${precio_orig:,.0f}~\n"
-                            f"✅ *Ahora: ${precio_act:,.0f}*\n\n"
-                            f"🛒 *Comprar en Mercado Libre:* {link_afiliado}\n\n"
-                            f"📢 *Sumate o compartí el canal:* {LINK_CANAL_WHATSAPP}"
-                        )
-                    else:
-                        return (
-                            f"⚡ *OFERTA DESTACADA DE HOY*\n\n"
-                            f"📦 *{titulo}*\n\n"
-                            f"✅ *Precio imperdible: ${precio_act:,.0f}*\n\n"
-                            f"🛒 *Comprar en Mercado Libre:* {link_afiliado}\n\n"
-                            f"📢 *Sumate o compartí el canal:* {LINK_CANAL_WHATSAPP}"
-                        )
+                titulo = data.get("title")
+                precio_act = data.get("price")
+                precio_orig = data.get("original_price")
+                permalink = data.get("permalink")
+                link_afiliado = f"{permalink}?tag={AFILIADO_TAG}"
+
+                if precio_orig and precio_act and precio_orig > precio_act:
+                    descuento = int(((precio_orig - precio_act) / precio_orig) * 100)
+                    return (
+                        f"🔥 *{descuento}% DE DESCUENTO*\n\n"
+                        f"📦 *{titulo}*\n\n"
+                        f"❌ Antes: ~${precio_orig:,.0f}~\n"
+                        f"✅ *Ahora: ${precio_act:,.0f}*\n\n"
+                        f"🛒 *Comprar en Mercado Libre:* {link_afiliado}\n\n"
+                        f"📢 *Sumate o compartí el canal:* {LINK_CANAL_WHATSAPP}"
+                    )
+                else:
+                    return (
+                        f"⚡ *OFERTA DESTACADA DE HOY*\n\n"
+                        f"📦 *{titulo}*\n\n"
+                        f"✅ *Precio imperdible: ${precio_act:,.0f}*\n\n"
+                        f"🛒 *Comprar en Mercado Libre:* {link_afiliado}\n\n"
+                        f"📢 *Sumate o compartí el canal:* {LINK_CANAL_WHATSAPP}"
+                    )
     except Exception as e:
         return f"Error en la consulta: {str(e)}"
-        
-    return "No se pudieron obtener productos destacados."
+
+    return "No se pudieron obtener productos."
 
 if __name__ == "__main__":
     oferta_msg = obtener_oferta()
