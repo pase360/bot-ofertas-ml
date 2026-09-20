@@ -5,7 +5,7 @@ import requests
 AFILIADO_TAG = "jlvidela"
 LINK_CANAL_WHATSAPP = "https://whatsapp.com/channel/0029VbDkrupBA1f1PtP0nk0V"
 
-# Listados de categorías estables (¡nunca dan error y siempre muestran stock actualizado!)
+# Listados de categorías estables
 OFERTAS_CATEGORIAS = [
     {
         "titulo": "Smart TVs LED en Oferta y Cuotas",
@@ -33,23 +33,25 @@ OFERTAS_CATEGORIAS = [
     }
 ]
 
-def enviar_a_textmebot(mensaje, imagen_url):
-    phone = os.environ.get("WHATSAPP_PHONE")
-    apikey = os.environ.get("WHATSAPP_APIKEY")
+def enviar_a_webhook(mensaje, imagen_url, titulo):
+    webhook_url = os.environ.get("MAKE_WEBHOOK_URL")
 
-    if not phone or not apikey:
-        print("⚠️ Faltan las credenciales en los Secrets.")
+    if not webhook_url:
+        print("⚠️ Falta la URL del webhook de Make en los Secrets.")
         return
 
-    texto_completo = f"{mensaje}\n\n📷 {imagen_url}"
-    url = f"https://api.textmebot.com/send.php?recipient={phone}&apikey={apikey}&text={requests.utils.quote(texto_completo)}"
+    payload = {
+        "titulo": titulo,
+        "mensaje": mensaje,
+        "imagen": imagen_url
+    }
 
     try:
-        res = requests.get(url, timeout=15)
+        res = requests.post(webhook_url, json=payload, timeout=15)
         if res.status_code == 200:
-            print("✅ ¡Oferta de categoría enviada con éxito!")
+            print("✅ ¡Oferta de categoría enviada a Make con éxito!")
         else:
-            print(f"❌ Error al enviar: Código {res.status_code}")
+            print(f"❌ Error al enviar a Make: Código {res.status_code}")
     except Exception as e:
         print(f"❌ Excepción: {str(e)}")
 
@@ -60,7 +62,6 @@ if __name__ == "__main__":
     titulo = item["titulo"]
     precio = item["precio"]
     
-    # Enlace seguro a la categoría con tu etiqueta de afiliado integrada
     link_afiliado = f"{item['url_base']}?tag={AFILIADO_TAG}"
     imagen_url = item["imagen"]
     
@@ -73,4 +74,4 @@ if __name__ == "__main__":
     )
 
     print(mensaje)
-    enviar_a_textmebot(mensaje, imagen_url)
+    enviar_a_webhook(mensaje, imagen_url, titulo)
