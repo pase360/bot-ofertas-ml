@@ -25,6 +25,7 @@ jobs:
 
     - name: Ejecutar Bot de Ofertas
       env:
+        MAKE_WEBHOOK_URL: ${{ secrets.MAKE_WEBHOOK_URL }}
         WHATSAPP_PHONE: ${{ secrets.WHATSAPP_PHONE }}
         WHATSAPP_APIKEY: ${{ secrets.WHATSAPP_APIKEY }}
       run: |
