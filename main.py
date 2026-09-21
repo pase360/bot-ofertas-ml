@@ -49,9 +49,26 @@ def publicar_en_canal_automatico(mensaje, imagen_url):
         try:
             print(f"🔗 Abriendo el canal: {LINK_CANAL_WHATSAPP}")
             page.goto(LINK_CANAL_WHATSAPP, timeout=60000)
-            time.sleep(10)
             
-            print("✅ Oferta procesada y lista para el canal.")
+            # Damos tiempo a que cargue la interfaz de WhatsApp Web
+            time.sleep(15)
+            
+            # Buscamos el cuadro de texto para escribir el mensaje en el canal
+            print("✍️ Escribiendo la oferta...")
+            # Selector genérico para el campo de escritura en canales/chats de WhatsApp Web
+            caja_texto = page.locator('div[contenteditable="true"][data-tab="1"]')
+            caja_texto.wait_for(timeout=30000)
+            caja_texto.click()
+            caja_texto.fill(mensaje)
+            
+            # Pequeña pausa para asegurar que el texto se cargó
+            time.sleep(2)
+            
+            # Presionamos Enter para enviar
+            page.keyboard.press("Enter")
+            
+            time.sleep(5)
+            print("✅ ¡Oferta publicada en el canal con éxito!")
             
         except Exception as e:
             print(f"❌ Error en la automatización del navegador: {str(e)}")
