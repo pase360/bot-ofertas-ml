@@ -8,6 +8,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    
+    # Declaramos los secretos aquí para que pasen directo a cualquier script del job
+    env:
+      WHATSAPP_PHONE: ${{ secrets.WHATSAPP_PHONE }}
+      WHATSAPP_APIKEY: ${{ secrets.WHATSAPP_APIKEY }}
 
     steps:
       - name: Descargar repositorio
@@ -24,8 +29,5 @@ jobs:
           pip install requests
 
       - name: Ejecutar Bot de Ofertas
-        env:
-          WHATSAPP_PHONE: ${{ secrets.WHATSAPP_PHONE }}
-          WHATSAPP_APIKEY: ${{ secrets.WHATSAPP_APIKEY }}
         run: |
           python main.py
