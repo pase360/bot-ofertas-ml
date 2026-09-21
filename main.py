@@ -6,15 +6,6 @@ import urllib.parse
 CLIENT_ID = os.environ.get("ML_CLIENT_ID", "3518144087916123")
 CLIENT_SECRET = os.environ.get("ML_CLIENT_SECRET", "zyaMZNRVOXXJ25DFRIMxLsG9n0ioXyhV")
 
-TERMINOS_BUSQUEDA = [
-    "smart tv",
-    "auriculares inalambricos",
-    "zapatillas deportivas",
-    "notebook",
-    "electrodomesticos",
-    "ofertas"
-]
-
 def obtener_token_acceso():
     url_token = "https://api.mercadolibre.com/oauth/token"
     payload = {
@@ -24,15 +15,15 @@ def obtener_token_acceso():
     }
     try:
         response = requests.post(url_token, data=payload, timeout=10)
-        print(f"DEBUG Token Status: {response.status_code}")
-        print(f"DEBUG Token Response: {response.text}")
         if response.status_code == 200:
             return response.json().get("access_token")
+        else:
+            print(f"Error al obtener token: {response.text}")
     except Exception as e:
         print(f"Excepción al conectar con OAuth de ML: {e}")
     return None
 
-def obtener_productos_con_api():
+def obtener_productos_de_ofertas():
     token = obtener_token_acceso()
     if not token:
         print("⚠️ No se pudo obtener el token de acceso.")
@@ -43,30 +34,39 @@ def obtener_productos_con_api():
     }
     
     links_encontrados = []
-    terminos_seleccionados = random.sample(TERMINOS_BUSQUEDA, min(3, len(TERMINOS_BUSQUEDA)))
-
-    for termino in terminos_seleccionados:
-        try:
-            url_api = f"https://api.mercadolibre.com/sites/MLA/search?q={urllib.parse.quote(termino)}&limit=15"
-            response = requests.get(url_api, headers=headers, timeout=10)
-            print(f"DEBUG Search '{termino}' Status: {response.status_code}")
+    
+    try:
+        # Endpoint oficial de ofertas y descuentos en Mercado Libre Argentina (MLA)
+        url_api = "https://api.mercadolibre.com/catalog_deals/MLA"
+        response = requests.get(url_api, headers=headers, timeout=10)
+        print(f"DEBUG API Ofertas Status: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            # Las ofertas suelen venir organizadas en una lista o en la clave 'results' / 'elements'
+            ofertas = data.get("results", []) or data.get("elements", [])
+            print(f"DEBUG Ofertas totales encontradas: {len(ofertas)}")
             
-            if response.status_code == 200:
-                data = response.json()
-                resultados = data.get("results", [])
-                print(f"DEBUG Resultados encontrados para '{termino}': {len(resultados)}")
-                
-                for item in resultados:
-                    permalink = item.get("permalink")
-                    if permalink:
-                        link_limpio = permalink.split('?')[0]
-                        if link_limpio not in links_encontrados:
-                            links_encontrados.append(link_limpio)
-            else:
-                print(f"DEBUG Error en búsqueda de '{termino}': {response.text}")
-        except Exception as e:
-            print(f"Excepción buscando '{termino}': {e}")
+            for item in ofertas:
+                # Dependiendo de la estructura, extraemos el id del producto (id o item_id) y armamos el permalink o lo buscamos
+                item_id = item.get("id") or item.get("item_id")
+                if item_id:
+                    # Consultamos el detalle del item para obtener su link directo y limpio
+                    url_item = f"https://api.mercadolibre.com/items/{item_id}"
+                    res_item = requests.get(url_item, headers=headers, timeout=5)
+                    if res_item.status_code == 200:
+                        permalink = res_item.json().get("permalink")
+                        if permalink:
+                            link_limpio = permalink.split('?')[0]
+                            if link_limpio not in links_encontrados:
+                                links_encontrados.append(link_limpio)
+        else:
+            print(f"DEBUG Error en API de Ofertas: {response.text}")
+            
+    except Exception as e:
+        print(f"Excepción consultando ofertas: {e}")
 
+    # Si conseguimos suficientes, mezclamos y devolvemos 10
     if len(links_encontrados) >= 10:
         return random.sample(links_encontrados, 10)
     else:
@@ -90,14 +90,14 @@ def enviar_a_whatsapp(mensaje):
         print(f"Error de red WhatsApp: {str(e)}")
 
 if __name__ == "__main__":
-    print("--- CONSULTANDO API OFICIAL DE MERCADO LIBRE (CON DIAGNÓSTICO) ---")
+    print("--- CONSULTANDO API DE OFERTAS DE MERCADO LIBRE ---")
     
-    productos = obtener_productos_con_api()
+    productos = obtener_productos_de_ofertas()
     
     if productos:
         mensaje = "\n".join(productos)
     else:
-        mensaje = "No se pudieron obtener productos autenticados en esta ejecución."
+        mensaje = "No se pudieron obtener productos en esta ejecución de ofertas."
 
     print("Mensaje a enviar:")
     print(mensaje)
