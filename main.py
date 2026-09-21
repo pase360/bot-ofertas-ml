@@ -1,28 +1,45 @@
 import os
 import random
 import requests
+from bs4 import BeautifulSoup
 import urllib.parse
 
-# URLs institucionales y secciones clave de alta conversión en Mercado Libre Argentina
-URLS_BASE_MERCADOLIBRE = [
-    "https://www.mercadolibre.com.ar/ofertas",
-    "https://www.mercadolibre.com.ar/mas-vendidos",
-    "https://www.mercadolibre.com.ar/coupon#nav-header",
-    "https://www.mercadolibre.com.ar/suscripciones/mla",
-    "https://www.mercadolibre.com.ar/c/tecnologia",
-    "https://www.mercadolibre.com.ar/c/electrodomesticos",
-    "https://www.mercadolibre.com.ar/c/herramientas-y-construccion",
-    "https://www.mercadolibre.com.ar/c/deportes-y-fitness",
-    "https://www.mercadolibre.com.ar/c/hogar-muebles-y-jardin",
-    "https://www.mercadolibre.com.ar/c/ropa-y-accesorios"
-]
+def obtener_productos_mas_vendidos():
+    url = "https://www.mercadolibre.com.ar/mas-vendidos"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    links_encontrados = []
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        print(f"DEBUG Status Más Vendidos: {response.status_code}")
+        
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Buscamos todos los enlaces dentro de la página de más vendidos
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                # Filtramos para quedarnos únicamente con links de productos individuales
+                if ('/p/MLA' in href or '/MLA-' in href) and 'mas-vendidos' not in href:
+                    link_limpio = href.split('?')[0]
+                    if link_limpio.startswith('/'):
+                        link_limpio = "https://www.mercadolibre.com.ar" + link_limpio
+                    
+                    if link_limpio not in links_encontrados:
+                        links_encontrados.append(link_limpio)
+        else:
+            print(f"DEBUG Error al acceder a la página: {response.status_code}")
+            
+    except Exception as e:
+        print(f"Excepción extrayendo productos: {e}")
 
-def obtener_links_curados():
-    # Mezclamos y seleccionamos 10 links variados de las secciones principales
-    if len(URLS_BASE_MERCADOLIBRE) >= 10:
-        return random.sample(URLS_BASE_MERCADOLIBRE, 10)
+    # Si encontramos suficientes, devolvemos 10 al azar para variar en cada ejecución
+    if len(links_encontrados) >= 10:
+        return random.sample(links_encontrados, 10)
     else:
-        return URLS_BASE_MERCADOLIBRE
+        return links_encontrados[:10]
 
 def enviar_a_whatsapp(mensaje):
     phone = os.environ.get("WHATSAPP_PHONE", "").strip().replace("+", "")
@@ -42,14 +59,14 @@ def enviar_a_whatsapp(mensaje):
         print(f"Error de red WhatsApp: {str(e)}")
 
 if __name__ == "__main__":
-    print("--- GENERANDO SELECCIÓN DE ENLACES DE MERCADO LIBRE ---")
+    print("--- EXTRAYENDO PRODUCTOS MÁS VENDIDOS ---")
     
-    productos = obtener_links_curados()
+    productos = obtener_productos_mas_vendidos()
     
     if productos:
         mensaje = "\n".join(productos)
     else:
-        mensaje = "No se pudieron generar enlaces en esta ejecución."
+        mensaje = "No se pudieron extraer productos en esta ejecución."
 
     print("Mensaje a enviar:")
     print(mensaje)
