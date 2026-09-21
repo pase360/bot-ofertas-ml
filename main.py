@@ -30,12 +30,12 @@ OFERTAS_CATEGORIAS = [
 ]
 
 def enviar_a_whatsapp(mensaje):
-    phone = os.environ.get("WHATSAPP_PHONE")
-    apikey = os.environ.get("WHATSAPP_APIKEY")
+    # Limpiamos espacios y quitamos el '+' si lo pusiste por error en el teléfono
+    phone = os.environ.get("WHATSAPP_PHONE", "").strip().replace("+", "")
+    apikey = os.environ.get("WHATSAPP_APIKEY", "").strip()
 
-    # Depuración para verificar en la consola de GitHub si la clave llegó correctamente
-    print(f"DEBUG WHATSAPP_PHONE: {phone}")
-    print(f"DEBUG WHATSAPP_APIKEY cargada: {'SÍ (Longitud: ' + str(len(apikey)) + ')' if apikey else 'NO (VACÍA)'}")
+    print(f"DEBUG Teléfono limpio: {phone}")
+    print(f"DEBUG APIKEY longitud limpia: {len(apikey)}")
 
     if not phone or not apikey:
         print("⚠️ Faltan las credenciales de WhatsApp en los Secrets de GitHub.")
@@ -47,10 +47,12 @@ def enviar_a_whatsapp(mensaje):
     try:
         res = requests.get(url, timeout=15)
         print(f"Respuesta de CallMeBot (Código {res.status_code}): {res.text}")
-        if res.status_code == 200 or "Message queued" in res.text or "Success" in res.text or "201" in str(res.status_code):
-            print("✅ ¡Mensaje enviado a WhatsApp con éxito!")
+        
+        # Validamos si realmente dio éxito de entrega real
+        if "Message queued" in res.text or "Success" in res.text or res.status_code == 200 and "ERROR" not in res.text:
+            print("✅ ¡Mensaje aceptado y en camino a tu WhatsApp!")
         else:
-            print("❌ La pasarela rechazó el mensaje.")
+            print("❌ La pasarela rechazó la clave o el teléfono. Revisa que tu número no tenga el signo '+' en los Secrets.")
     except Exception as e:
         print(f"❌ Excepción de red: {str(e)}")
 
