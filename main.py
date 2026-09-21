@@ -10,69 +10,63 @@ OFERTAS_CATEGORIAS = [
     {
         "titulo": "Smart TVs LED en Oferta y Cuotas",
         "precio": "Ver precios y modelos actualizados",
-        "url_base": "https://listado.mercadolibre.com.ar/televisores/smart-tv/_NoIndex_True",
-        "imagen": "https://http2.mlstatic.com/D_NQ_NP_994755-MLA74971488183_032024-O.jpg"
+        "url_base": "https://listado.mercadolibre.com.ar/televisores/smart-tv/_NoIndex_True"
     },
     {
-        "titulo": "Auriculares Inalámbricos Más Vendidos",
+        "titulo": "Auriculares Inalambricos Mas Vendidos",
         "precio": "Ver precios y modelos actualizados",
-        "url_base": "https://listado.mercadolibre.com.ar/audio/auriculares-inalambricos/_NoIndex_True",
-        "imagen": "https://http2.mlstatic.com/D_NQ_NP_835213-MLA53965518290_022023-O.jpg"
+        "url_base": "https://listado.mercadolibre.com.ar/audio/auriculares-inalambricos/_NoIndex_True"
     },
     {
         "titulo": "Zapatillas Deportivas Primeras Marcas",
         "precio": "Ver precios y modelos actualizados",
-        "url_base": "https://listado.mercadolibre.com.ar/zapatillas-deportivas/_NoIndex_True",
-        "imagen": "https://http2.mlstatic.com/D_NQ_NP_624893-MLA71548122910_092023-O.jpg"
+        "url_base": "https://listado.mercadolibre.com.ar/zapatillas-deportivas/_NoIndex_True"
     },
     {
         "titulo": "Notebooks y Laptops con Descuento",
         "precio": "Ver precios y modelos actualizados",
-        "url_base": "https://listado.mercadolibre.com.ar/computacion/notebooks/_NoIndex_True",
-        "imagen": "https://http2.mlstatic.com/D_NQ_NP_678241-MLA72458124503_102023-O.jpg"
+        "url_base": "https://listado.mercadolibre.com.ar/computacion/notebooks/_NoIndex_True"
     }
 ]
 
-def enviar_a_whatsapp(mensaje, imagen_url):
+def enviar_a_whatsapp(mensaje):
     phone = os.environ.get("WHATSAPP_PHONE")
     apikey = os.environ.get("WHATSAPP_APIKEY")
 
     if not phone or not apikey:
-        print("⚠️ Faltan las credenciales de WhatsApp en los Secrets de GitHub.")
+        print("⚠️ Faltan las credenciales de WhatsApp en los Secrets.")
         return
 
-    mensaje_completo = f"{mensaje}\n\n📷 Imagen: {imagen_url}"
-    mensaje_codificado = urllib.parse.quote(mensaje_completo)
-    
+    # Codificamos el mensaje limpio para evitar bloqueos por caracteres especiales
+    mensaje_codificado = urllib.parse.quote(mensaje)
     url = f"https://api.callmebot.com/whatsapp.php?phone={phone}&text={mensaje_codificado}&apikey={apikey}"
 
     try:
         res = requests.get(url, timeout=15)
-        # El código 201 en CallMeBot indica éxito de envío
-        if res.status_code in [200, 201]:
-            print("✅ ¡Oferta enviada a tu WhatsApp con éxito!")
+        print(f"Respuesta de CallMeBot (Código {res.status_code}): {res.text}")
+        if res.status_code == 200 or "Message queued" in res.text or "Success" in res.text:
+            print("✅ ¡Mensaje procesado por la pasarela de WhatsApp!")
         else:
-            print(f"❌ Error al enviar a WhatsApp: Código {res.status_code}")
+            print("❌ La pasarela rechazó el mensaje.")
     except Exception as e:
-        print(f"❌ Excepción: {str(e)}")
+        print(f"❌ Excepción de red: {str(e)}")
 
 if __name__ == "__main__":
-    print("--- GENERANDO OFERTA DE CATEGORÍA ---")
+    print("--- GENERANDO OFERTA ---")
     
     item = random.choice(OFERTAS_CATEGORIAS)
     titulo = item["titulo"]
     precio = item["precio"]
-    
     link_afiliado = f"{item['url_base']}?tag={AFILIADO_TAG}"
-    imagen_url = item["imagen"]
     
+    # Texto totalmente simplificado para asegurar entrega sin bloqueos
     mensaje = (
-        f"🔥 *¡OFERTAS DESTACADAS EN MERCADO LIBRE!* 🔥\n\n"
-        f"📦 *{titulo}*\n\n"
-        f"💰 *Estado:* {precio}\n\n"
-        f"🛒 *Mirá todas las opciones y comprá acá:* {link_afiliado}\n\n"
-        f"📢 *Sumate al canal para más ofertas:* {LINK_CANAL_WHATSAPP}"
+        f"OFERTA DESTACADA MERCADO LIBRE\n\n"
+        f"{titulo}\n"
+        f"Estado: {precio}\n\n"
+        f"Comprá acá: {link_afiliado}\n\n"
+        f"Canal de ofertas: {LINK_CANAL_WHATSAPP}"
     )
 
     print(mensaje)
-    enviar_a_whatsapp(mensaje, imagen_url)
+    enviar_a_whatsapp(mensaje)
