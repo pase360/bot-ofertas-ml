@@ -21,11 +21,13 @@ jobs:
       - name: Instalar librerías
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4
+          pip install requests
 
       - name: Ejecutar Bot de Ofertas
         env:
           WHATSAPP_PHONE: ${{ secrets.WHATSAPP_PHONE }}
           WHATSAPP_APIKEY: ${{ secrets.WHATSAPP_APIKEY }}
+          ML_CLIENT_ID: ${{ secrets.MELI_CLIENT_ID }}
+          ML_CLIENT_SECRET: ${{ secrets.MELI_CLIENT_SECRET }}
         run: |
           python main.py
