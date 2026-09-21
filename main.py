@@ -37,11 +37,13 @@ def publicar_en_canal_automatico(mensaje, imagen_url):
     print("🤖 Iniciando el navegador automático para publicar en el canal...")
     
     with sync_playwright() as p:
+        # Usamos una carpeta de sesión para mantener el inicio de sesión de WhatsApp Web
         user_data_dir = "./whatsapp_session"
         browser = p.chromium.launch_persistent_context(
             user_data_dir=user_data_dir,
             headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox"]
+            args=["--no-sandbox", "--disable-setuid-sandbox"],
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         
         page = browser.new_page()
@@ -50,21 +52,38 @@ def publicar_en_canal_automatico(mensaje, imagen_url):
             print(f"🔗 Abriendo el canal: {LINK_CANAL_WHATSAPP}")
             page.goto(LINK_CANAL_WHATSAPP, timeout=60000)
             
-            # Damos tiempo a que cargue la interfaz de WhatsApp Web
+            # Esperamos a que la interfaz cargue por completo
+            print("⏳ Esperando carga de la interfaz de WhatsApp Web...")
             time.sleep(15)
             
-            # Buscamos el cuadro de texto para escribir el mensaje en el canal
-            print("✍️ Escribiendo la oferta...")
-            # Selector genérico para el campo de escritura en canales/chats de WhatsApp Web
-            caja_texto = page.locator('div[contenteditable="true"][data-tab="1"]')
-            caja_texto.wait_for(timeout=30000)
+            # Intentamos localizar la caja de texto usando múltiples selectores alternativos de WhatsApp Web
+            print("✍️ Buscando el campo de escritura...")
+            selectors = [
+                'div[contenteditable="true"][data-tab="1"]',
+                'div[contenteditable="true"]',
+                'p.selectable-text'
+            ]
+            
+            caja_texto = None
+            for sel in selectors:
+                try:
+                    caja_texto = page.locator(sel).first
+                    caja_texto.wait_for(timeout=10000)
+                    if caja_texto.is_visible():
+                        break
+                except:
+                    continue
+            
+            if not caja_texto or not caja_texto.is_visible():
+                raise Exception("No se encontró el campo de texto visible en el canal. Puede requerir vinculación de sesión inicial.")
+            
             caja_texto.click()
-            caja_texto.fill(mensaje)
+            # Escribimos el mensaje completo incluyendo la URL de la imagen para previsualización
+            mensaje_final = f"{mensaje}\n\n📷 Imagen de referencia: {imagen_url}"
+            caja_texto.fill(mensaje_final)
             
-            # Pequeña pausa para asegurar que el texto se cargó
             time.sleep(2)
-            
-            # Presionamos Enter para enviar
+            print("📤 Enviando mensaje...")
             page.keyboard.press("Enter")
             
             time.sleep(5)
