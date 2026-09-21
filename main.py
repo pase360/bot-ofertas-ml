@@ -48,7 +48,8 @@ def enviar_a_whatsapp(mensaje, imagen_url):
 
     try:
         res = requests.get(url, timeout=15)
-        if res.status_code == 200:
+        # El código 201 en CallMeBot indica éxito de envío
+        if res.status_code in [200, 201]:
             print("✅ ¡Oferta enviada a tu WhatsApp con éxito!")
         else:
             print(f"❌ Error al enviar a WhatsApp: Código {res.status_code}")
