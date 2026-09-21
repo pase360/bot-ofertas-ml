@@ -2,43 +2,45 @@ import os
 import random
 import requests
 import urllib.parse
-from bs4 import BeautifulSoup
 
-# Categorías mixtas para buscar productos de alta demanda y rotación
-CATEGORIAS_BUSQUEDA = [
-    "https://listado.mercadolibre.com.ar/televisores/smart-tv/_NoIndex_True",
-    "https://listado.mercadolibre.com.ar/audio/auriculares-inalambricos/_NoIndex_True",
-    "https://listado.mercadolibre.com.ar/zapatillas-deportivas/_NoIndex_True",
-    "https://listado.mercadolibre.com.ar/computacion/notebooks/_NoIndex_True",
-    "https://listado.mercadolibre.com.ar/hogar/electrodomesticos/_NoIndex_True"
+# Términos de búsqueda variados para que la API nos devuelva productos de alta demanda
+TERMINOS_BUSQUEDA = [
+    "smart tv",
+    "auriculares inalambricos",
+    "zapatillas deportivas",
+    "notebook",
+    "electrodomesticos hogar",
+    "ofertas"
 ]
 
-def obtener_productos_aleatorios():
+def obtener_productos_api():
     links_encontrados = []
     
-    # Headers para simular un navegador y evitar bloqueos básicos de scraping
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
+    # Seleccionamos algunos términos al azar para mezclar categorías
+    terminos_seleccionados = random.sample(TERMINOS_BUSQUEDA, min(3, len(TERMINOS_BUSQUEDA)))
 
-    for url_cat in CATEGORIAS_BUSQUEDA:
+    for termino in terminos_seleccionados:
         try:
-            response = requests.get(url_cat, headers=headers, timeout=10)
+            # Endpoint público de búsqueda de Mercado Libre (Argentina = MLA)
+            url_api = f"https://api.mercadolibre.com/sites/MLA/search?q={urllib.parse.quote(termino)}&limit=15"
+            response = requests.get(url_api, timeout=10)
+            
             if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                # Buscamos los links de los productos en los listados de Mercado Libre
-                items = soup.select('a.ui-search-item__group__element, a.poly-component__title')
-                for item in items:
-                    link = item.get('href')
-                    if link and "mercadolibre.com.ar" in link and "#reco_item_pos" not in link:
-                        # Limpiamos parámetros innecesarios para dejar el link base del producto
-                        link_limpio = link.split('#')[0].split('?')[0]
+                data = response.json()
+                resultados = data.get("results", [])
+                
+                for item in resultados:
+                    # Extraemos directamente el enlace permanente del producto
+                    permalink = item.get("permalink")
+                    if permalink:
+                        # Limpiamos parámetros de tracking internos si los trae
+                        link_limpio = permalink.split('?')[0]
                         if link_limpio not in links_encontrados:
                             links_encontrados.append(link_limpio)
         except Exception as e:
-            print(f"Error al escrapear {url_cat}: {e}")
+            print(f"Error consultando la API para '{termino}': {e}")
 
-    # Si encontramos suficientes, mezclamos y seleccionamos 10; si no, completamos con lo que haya
+    # Mezclamos todos los resultados encontrados y devolvemos 10
     if len(links_encontrados) >= 10:
         return random.sample(links_encontrados, 10)
     else:
@@ -62,15 +64,14 @@ def enviar_a_whatsapp(mensaje):
         print(f"Error de red: {str(e)}")
 
 if __name__ == "__main__":
-    print("--- BUSCANDO 10 PRODUCTOS ---")
+    print("--- CONSULTANDO API DE MERCADO LIBRE ---")
     
-    productos = obtener_productos_aleatorios()
+    productos = obtener_productos_api()
     
     if productos:
-        # Armamos el mensaje exclusivamente con los links uno debajo del otro
         mensaje = "\n".join(productos)
     else:
-        mensaje = "No se pudieron extraer productos en esta ejecución."
+        mensaje = "No se pudieron obtener productos en esta ejecución."
 
     print("Mensaje a enviar:")
     print(mensaje)
