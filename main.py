@@ -33,19 +33,22 @@ def enviar_a_whatsapp(mensaje):
     phone = os.environ.get("WHATSAPP_PHONE")
     apikey = os.environ.get("WHATSAPP_APIKEY")
 
+    # Depuración para verificar en la consola de GitHub si la clave llegó correctamente
+    print(f"DEBUG WHATSAPP_PHONE: {phone}")
+    print(f"DEBUG WHATSAPP_APIKEY cargada: {'SÍ (Longitud: ' + str(len(apikey)) + ')' if apikey else 'NO (VACÍA)'}")
+
     if not phone or not apikey:
-        print("⚠️ Faltan las credenciales de WhatsApp en los Secrets.")
+        print("⚠️ Faltan las credenciales de WhatsApp en los Secrets de GitHub.")
         return
 
-    # Codificamos el mensaje limpio para evitar bloqueos por caracteres especiales
     mensaje_codificado = urllib.parse.quote(mensaje)
     url = f"https://api.callmebot.com/whatsapp.php?phone={phone}&text={mensaje_codificado}&apikey={apikey}"
 
     try:
         res = requests.get(url, timeout=15)
         print(f"Respuesta de CallMeBot (Código {res.status_code}): {res.text}")
-        if res.status_code == 200 or "Message queued" in res.text or "Success" in res.text:
-            print("✅ ¡Mensaje procesado por la pasarela de WhatsApp!")
+        if res.status_code == 200 or "Message queued" in res.text or "Success" in res.text or "201" in str(res.status_code):
+            print("✅ ¡Mensaje enviado a WhatsApp con éxito!")
         else:
             print("❌ La pasarela rechazó el mensaje.")
     except Exception as e:
@@ -59,7 +62,6 @@ if __name__ == "__main__":
     precio = item["precio"]
     link_afiliado = f"{item['url_base']}?tag={AFILIADO_TAG}"
     
-    # Texto totalmente simplificado para asegurar entrega sin bloqueos
     mensaje = (
         f"OFERTA DESTACADA MERCADO LIBRE\n\n"
         f"{titulo}\n"
