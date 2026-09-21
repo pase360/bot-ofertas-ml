@@ -17,13 +17,22 @@ def obtener_token_acceso():
         response = requests.post(url_token, data=payload, timeout=10)
         if response.status_code == 200:
             return response.json().get("access_token")
-        else:
-            print(f"Error al obtener token: {response.text}")
     except Exception as e:
-        print(f"Excepción al conectar con OAuth de ML: {e}")
+        print(f"Excepción al conectar con OAuth: {e}")
     return None
 
-def obtener_productos_de_ofertas():
+def obtener_categorias_dinamicas(headers):
+    """Obtiene la lista completa de categorías oficiales de Argentina desde la API"""
+    try:
+        url = "https://api.mercadolibre.com/sites/MLA/categories"
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            return [cat["id"] for cat in response.json()]
+    except Exception as e:
+        print(f"Error obteniendo categorías: {e}")
+    return []
+
+def obtener_productos_dinamicos():
     token = obtener_token_acceso()
     if not token:
         print("⚠️ No se pudo obtener el token de acceso.")
@@ -33,40 +42,32 @@ def obtener_productos_de_ofertas():
         "Authorization": f"Bearer {token}"
     }
     
-    links_encontrados = []
-    
-    try:
-        # Endpoint oficial de ofertas y descuentos en Mercado Libre Argentina (MLA)
-        url_api = "https://api.mercadolibre.com/catalog_deals/MLA"
-        response = requests.get(url_api, headers=headers, timeout=10)
-        print(f"DEBUG API Ofertas Status: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            # Las ofertas suelen venir organizadas en una lista o en la clave 'results' / 'elements'
-            ofertas = data.get("results", []) or data.get("elements", [])
-            print(f"DEBUG Ofertas totales encontradas: {len(ofertas)}")
-            
-            for item in ofertas:
-                # Dependiendo de la estructura, extraemos el id del producto (id o item_id) y armamos el permalink o lo buscamos
-                item_id = item.get("id") or item.get("item_id")
-                if item_id:
-                    # Consultamos el detalle del item para obtener su link directo y limpio
-                    url_item = f"https://api.mercadolibre.com/items/{item_id}"
-                    res_item = requests.get(url_item, headers=headers, timeout=5)
-                    if res_item.status_code == 200:
-                        permalink = res_item.json().get("permalink")
-                        if permalink:
-                            link_limpio = permalink.split('?')[0]
-                            if link_limpio not in links_encontrados:
-                                links_encontrados.append(link_limpio)
-        else:
-            print(f"DEBUG Error en API de Ofertas: {response.text}")
-            
-    except Exception as e:
-        print(f"Excepción consultando ofertas: {e}")
+    # Obtenemos las categorías de forma dinámica de la API
+    todas_las_categorias = obtener_categorias_dinamicas(headers)
+    if not todas_las_categorias:
+        print("⚠️ No se pudieron cargar las categorías dinámicas.")
+        return []
 
-    # Si conseguimos suficientes, mezclamos y devolvemos 10
+    links_encontrados = []
+    # Seleccionamos 4 categorías al azar del total disponible en la plataforma
+    categorias_elegidas = random.sample(todas_las_categorias, min(4, len(todas_las_categorias)))
+
+    for cat_id in categorias_elegidas:
+        try:
+            url_api = f"https://api.mercadolibre.com/sites/MLA/search?category={cat_id}&limit=10"
+            response = requests.get(url_api, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                resultados = response.json().get("results", [])
+                for item in resultados:
+                    permalink = item.get("permalink")
+                    if permalink:
+                        link_limpio = permalink.split('?')[0]
+                        if link_limpio not in links_encontrados:
+                            links_encontrados.append(link_limpio)
+        except Exception as e:
+            print(f"Error en categoría {cat_id}: {e}")
+
     if len(links_encontrados) >= 10:
         return random.sample(links_encontrados, 10)
     else:
@@ -90,14 +91,14 @@ def enviar_a_whatsapp(mensaje):
         print(f"Error de red WhatsApp: {str(e)}")
 
 if __name__ == "__main__":
-    print("--- CONSULTANDO API DE OFERTAS DE MERCADO LIBRE ---")
+    print("--- CONSULTANDO PRODUCTOS DINÁMICOS DE MERCADO LIBRE ---")
     
-    productos = obtener_productos_de_ofertas()
+    productos = obtener_productos_dinamicos()
     
     if productos:
         mensaje = "\n".join(productos)
     else:
-        mensaje = "No se pudieron obtener productos en esta ejecución de ofertas."
+        mensaje = "No se pudieron obtener productos en esta ejecución."
 
     print("Mensaje a enviar:")
     print(mensaje)
