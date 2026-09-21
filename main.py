@@ -6,6 +6,20 @@ import urllib.parse
 CLIENT_ID = os.environ.get("ML_CLIENT_ID", "3518144087916123")
 CLIENT_SECRET = os.environ.get("ML_CLIENT_SECRET", "zyaMZNRVOXXJ25DFRIMxLsG9n0ioXyhV")
 
+# Categorías principales de Mercado Libre Argentina (IDs oficiales y estables)
+CATEGORIAS_OFICIALES = [
+    "MLA1002", # Celulares y Teléfonos
+    "MLA1652", # Computación (Notebooks)
+    "MLA1000", # Electrónica, Audio y Video
+    "MLA1574", # Hogar y Electrodomésticos
+    "MLA1144", # Deportes y Fitness
+    "MLA1276", # Deportes y Fitness / Bicicletas
+    "MLA1430", # Ropa y Accesorios
+    "MLA1540", # Netbooks y Accesorios
+    "MLA1743", # Autos, Motos y Otros
+    "MLA1334"  # Libros, Revistas y Comics
+]
+
 def obtener_token_acceso():
     url_token = "https://api.mercadolibre.com/oauth/token"
     payload = {
@@ -17,22 +31,13 @@ def obtener_token_acceso():
         response = requests.post(url_token, data=payload, timeout=10)
         if response.status_code == 200:
             return response.json().get("access_token")
+        else:
+            print(f"Error al obtener token: {response.text}")
     except Exception as e:
         print(f"Excepción al conectar con OAuth: {e}")
     return None
 
-def obtener_categorias_dinamicas(headers):
-    """Obtiene la lista completa de categorías oficiales de Argentina desde la API"""
-    try:
-        url = "https://api.mercadolibre.com/sites/MLA/categories"
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            return [cat["id"] for cat in response.json()]
-    except Exception as e:
-        print(f"Error obteniendo categorías: {e}")
-    return []
-
-def obtener_productos_dinamicos():
+def obtener_productos():
     token = obtener_token_acceso()
     if not token:
         print("⚠️ No se pudo obtener el token de acceso.")
@@ -42,20 +47,15 @@ def obtener_productos_dinamicos():
         "Authorization": f"Bearer {token}"
     }
     
-    # Obtenemos las categorías de forma dinámica de la API
-    todas_las_categorias = obtener_categorias_dinamicas(headers)
-    if not todas_las_categorias:
-        print("⚠️ No se pudieron cargar las categorías dinámicas.")
-        return []
-
     links_encontrados = []
-    # Seleccionamos 4 categorías al azar del total disponible en la plataforma
-    categorias_elegidas = random.sample(todas_las_categorias, min(4, len(todas_las_categorias)))
+    # Seleccionamos 4 categorías al azar de nuestra lista estable
+    categorias_elegidas = random.sample(CATEGORIAS_OFICIALES, min(4, len(CATEGORIAS_OFICIALES)))
 
     for cat_id in categorias_elegidas:
         try:
-            url_api = f"https://api.mercadolibre.com/sites/MLA/search?category={cat_id}&limit=10"
+            url_api = f"https://api.mercadolibre.com/sites/MLA/search?category={cat_id}&limit=15"
             response = requests.get(url_api, headers=headers, timeout=10)
+            print(f"DEBUG Categoría {cat_id} - Status: {response.status_code}")
             
             if response.status_code == 200:
                 resultados = response.json().get("results", [])
@@ -66,7 +66,7 @@ def obtener_productos_dinamicos():
                         if link_limpio not in links_encontrados:
                             links_encontrados.append(link_limpio)
         except Exception as e:
-            print(f"Error en categoría {cat_id}: {e}")
+            print(f"Error consultando categoría {cat_id}: {e}")
 
     if len(links_encontrados) >= 10:
         return random.sample(links_encontrados, 10)
@@ -91,9 +91,9 @@ def enviar_a_whatsapp(mensaje):
         print(f"Error de red WhatsApp: {str(e)}")
 
 if __name__ == "__main__":
-    print("--- CONSULTANDO PRODUCTOS DINÁMICOS DE MERCADO LIBRE ---")
+    print("--- CONSULTANDO PRODUCTOS DE MERCADO LIBRE ---")
     
-    productos = obtener_productos_dinamicos()
+    productos = obtener_productos()
     
     if productos:
         mensaje = "\n".join(productos)
