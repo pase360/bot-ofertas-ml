@@ -3,7 +3,6 @@ import random
 import requests
 import urllib.parse
 
-# Credenciales de tu App de Mercado Libre
 CLIENT_ID = os.environ.get("ML_CLIENT_ID", "3518144087916123")
 CLIENT_SECRET = os.environ.get("ML_CLIENT_SECRET", "zyaMZNRVOXXJ25DFRIMxLsG9n0ioXyhV")
 
@@ -17,7 +16,6 @@ TERMINOS_BUSQUEDA = [
 ]
 
 def obtener_token_acceso():
-    """Genera un token de acceso temporal usando las credenciales de la App"""
     url_token = "https://api.mercadolibre.com/oauth/token"
     payload = {
         "grant_type": "client_credentials",
@@ -26,10 +24,10 @@ def obtener_token_acceso():
     }
     try:
         response = requests.post(url_token, data=payload, timeout=10)
+        print(f"DEBUG Token Status: {response.status_code}")
+        print(f"DEBUG Token Response: {response.text}")
         if response.status_code == 200:
             return response.json().get("access_token")
-        else:
-            print(f"Error al obtener token de ML: {response.text}")
     except Exception as e:
         print(f"Excepción al conectar con OAuth de ML: {e}")
     return None
@@ -37,7 +35,7 @@ def obtener_token_acceso():
 def obtener_productos_con_api():
     token = obtener_token_acceso()
     if not token:
-        print("⚠️ No se pudo autenticar con la API de Mercado Libre.")
+        print("⚠️ No se pudo obtener el token de acceso.")
         return []
 
     headers = {
@@ -51,10 +49,12 @@ def obtener_productos_con_api():
         try:
             url_api = f"https://api.mercadolibre.com/sites/MLA/search?q={urllib.parse.quote(termino)}&limit=15"
             response = requests.get(url_api, headers=headers, timeout=10)
+            print(f"DEBUG Search '{termino}' Status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
                 resultados = data.get("results", [])
+                print(f"DEBUG Resultados encontrados para '{termino}': {len(resultados)}")
                 
                 for item in resultados:
                     permalink = item.get("permalink")
@@ -62,8 +62,10 @@ def obtener_productos_con_api():
                         link_limpio = permalink.split('?')[0]
                         if link_limpio not in links_encontrados:
                             links_encontrados.append(link_limpio)
+            else:
+                print(f"DEBUG Error en búsqueda de '{termino}': {response.text}")
         except Exception as e:
-            print(f"Error buscando '{termino}': {e}")
+            print(f"Excepción buscando '{termino}': {e}")
 
     if len(links_encontrados) >= 10:
         return random.sample(links_encontrados, 10)
@@ -88,7 +90,7 @@ def enviar_a_whatsapp(mensaje):
         print(f"Error de red WhatsApp: {str(e)}")
 
 if __name__ == "__main__":
-    print("--- CONSULTANDO API OFICIAL DE MERCADO LIBRE ---")
+    print("--- CONSULTANDO API OFICIAL DE MERCADO LIBRE (CON DIAGNÓSTICO) ---")
     
     productos = obtener_productos_con_api()
     
