@@ -42,17 +42,18 @@ def enviar_a_whatsapp(mensaje):
         return
 
     mensaje_codificado = urllib.parse.quote(mensaje)
-    url = f"https://api.callmebot.com/whatsapp.php?phone={phone}&text={mensaje_codificado}&apikey={apikey}"
+    # URL corregida para usar TextMeBot en lugar de CallMeBot
+    url = f"https://api.textmebot.com/send.php?phone={phone}&text={mensaje_codificado}&apikey={apikey}"
 
     try:
         res = requests.get(url, timeout=15)
-        print(f"Respuesta de CallMeBot (Código {res.status_code}): {res.text}")
+        print(f"Respuesta de TextMeBot (Código {res.status_code}): {res.text}")
         
         # Validamos si realmente dio éxito de entrega real
         if "Message queued" in res.text or "Success" in res.text or res.status_code == 200 and "ERROR" not in res.text:
             print("✅ ¡Mensaje aceptado y en camino a tu WhatsApp!")
         else:
-            print("❌ La pasarela rechazó la clave o el teléfono. Revisa que tu número no tenga el signo '+' en los Secrets.")
+            print("❌ La pasarela rechazó la clave o el teléfono. Revisa que tus Secrets estén correctos.")
     except Exception as e:
         print(f"❌ Excepción de red: {str(e)}")
 
