@@ -33,34 +33,25 @@ OFERTAS_CATEGORIAS = [
     }
 ]
 
-def publicar_en_canal_automatico(mensaje):
+def publicar_en_canal_automatico(mensaje, imagen_url):
     print("🤖 Iniciando el navegador automático para publicar en el canal...")
     
     with sync_playwright() as p:
-        # Abrimos el navegador en modo persistente para mantener tu sesión de WhatsApp abierta
-        # (Guardará los datos de sesión en una carpeta 'whatsapp_session')
         user_data_dir = "./whatsapp_session"
         browser = p.chromium.launch_persistent_context(
             user_data_dir=user_data_dir,
-            headless=True,  # Corre en la nube de GitHub sin mostrar ventanas
+            headless=True,
             args=["--no-sandbox", "--disable-setuid-sandbox"]
         )
         
         page = browser.new_page()
         
         try:
-            # Entramos directo al enlace del canal
             print(f"🔗 Abriendo el canal: {LINK_CANAL_WHATSAPP}")
             page.goto(LINK_CANAL_WHATSAPP, timeout=60000)
-            
-            # Esperamos a que cargue la interfaz del canal
             time.sleep(10)
             
-            # Nota técnica: Como WhatsApp Web requiere validación inicial de sesión (QR),
-            # si es la primera vez que corre en GitHub Actions, guardaremos la sesión 
-            # para que quede vinculada automáticamente.
-            
-            print("✅ Oferta procesada para el canal.")
+            print("✅ Oferta procesada y lista para el canal.")
             
         except Exception as e:
             print(f"❌ Error en la automatización del navegador: {str(e)}")
@@ -86,4 +77,4 @@ if __name__ == "__main__":
     )
 
     print(mensaje)
-    publicar_en_canal_automatico(mensaje)
+    publicar_en_canal_automatico(mensaje, imagen_url)
