@@ -1,5 +1,6 @@
 import random
 import re
+import json
 import requests
 from bs4 import BeautifulSoup
 
@@ -9,7 +10,8 @@ HEADERS = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
-    )
+    ),
+    "Accept-Language": "es-AR,es;q=0.9",
 }
 
 
@@ -55,11 +57,14 @@ def obtener_productos_mas_vendidos():
 
     except Exception as e:
         print(
-            f"Excepción extrayendo productos: {e}"
+            f"ERROR Más Vendidos: {e}"
         )
 
     if len(links_encontrados) >= 10:
-        return random.sample(links_encontrados, 10)
+        return random.sample(
+            links_encontrados,
+            10
+        )
 
     return links_encontrados[:10]
 
@@ -73,98 +78,223 @@ def obtener_datos_producto(url):
         response = requests.get(
             url,
             headers=HEADERS,
-            timeout=15
+            timeout=20,
+            allow_redirects=True
         )
 
-        if response.status_code != 200:
-            return nombre, precio, cuotas
+        print(
+            f"   HTTP producto: "
+            f"{response.status_code}"
+        )
+
+        html = response.text
 
         soup = BeautifulSoup(
-            response.text,
+            html,
             "html.parser"
         )
 
+        # -------------------------
         # NOMBRE
-        h1 = soup.find("h1")
+        # -------------------------
 
-        if h1:
-            nombre = h1.get_text(
-                " ",
-                strip=True
-            )
-
-        # PRECIO
-        meta_precio = soup.find(
+        og_title = soup.find(
             "meta",
-            attrs={"itemprop": "price"}
+            property="og:title"
         )
 
-        if meta_precio and meta_precio.get("content"):
-            valor = meta_precio["content"]
-
-            try:
-                numero = float(valor)
-
-                precio = (
-                    "$"
-                    + f"{numero:,.0f}"
-                    .replace(",", ".")
-                )
-            except Exception:
-                precio = "$" + valor
+        if (
+            og_title
+            and og_title.get("content")
+        ):
+            nombre = og_title[
+                "content"
+            ].strip()
 
         else:
-            precio_elemento = soup.select_one(
+            titulo = soup.find("h1")
+
+            if titulo:
+                nombre = titulo.get_text(
+                    " ",
+                    strip=True
+                )
+
+        # -------------------------
+        # PRECIO - JSON-LD
+        # -------------------------
+
+        scripts = soup.find_all(
+            "script",
+            type="application/ld+json"
+        )
+
+        for script in scripts:
+            try:
+                datos = json.loads(
+                    script.string or ""
+                )
+
+                objetos = (
+                    datos
+                    if isinstance(datos, list)
+                    else [datos]
+                )
+
+                for objeto in objetos:
+                    if not isinstance(
+                        objeto,
+                        dict
+                    ):
+                        continue
+
+                    oferta = objeto.get(
+                        "offers"
+                    )
+
+                    if isinstance(
+                        oferta,
+                        dict
+                    ):
+                        valor = oferta.get(
+                            "price"
+                        )
+
+                        if valor:
+                            precio = (
+                                "$"
+                                + formatear_precio(
+                                    valor
+                                )
+                            )
+                            break
+
+                if precio != "Precio no disponible":
+                    break
+
+            except Exception:
+                pass
+
+        # -------------------------
+        # PRECIO - META
+        # -------------------------
+
+        if precio == "Precio no disponible":
+
+            posibles_meta = [
+                soup.find(
+                    "meta",
+                    property="product:price:amount"
+                ),
+                soup.find(
+                    "meta",
+                    attrs={
+                        "itemprop": "price"
+                    }
+                ),
+            ]
+
+            for meta in posibles_meta:
+                if (
+                    meta
+                    and meta.get("content")
+                ):
+                    precio = (
+                        "$"
+                        + formatear_precio(
+                            meta["content"]
+                        )
+                    )
+                    break
+
+        # -------------------------
+        # PRECIO - HTML
+        # -------------------------
+
+        if precio == "Precio no disponible":
+
+            elemento = soup.select_one(
                 ".andes-money-amount__fraction"
             )
 
-            if precio_elemento:
+            if elemento:
                 precio = (
                     "$"
-                    + precio_elemento.get_text(
+                    + elemento.get_text(
                         strip=True
                     )
                 )
 
+        # -------------------------
         # CUOTAS
-        texto_pagina = soup.get_text(
+        # -------------------------
+
+        texto = soup.get_text(
             " ",
             strip=True
         )
 
         patrones = [
-            r"(\d+)\s+cuotas\s+sin\s+inter[eé]s",
-            r"(\d+)\s+cuotas\s+de\s+\$[\d\.\,]+",
+            r"\d+\s+cuotas\s+sin\s+inter[eé]s(?:\s+de\s+\$[\d\.\,]+)?",
+            r"\d+\s+cuotas\s+de\s+\$[\d\.\,]+",
         ]
 
         for patron in patrones:
-            coincidencia = re.search(
+            resultado = re.search(
                 patron,
-                texto_pagina,
+                texto,
                 re.IGNORECASE
             )
 
-            if coincidencia:
-                cuotas = coincidencia.group(0)
+            if resultado:
+                cuotas = (
+                    resultado
+                    .group(0)
+                    .strip()
+                )
                 break
 
     except Exception as e:
         print(
-            f"Error obteniendo datos de {url}: {e}"
+            f"   ERROR producto: {e}"
         )
+
+    nombre = (
+        nombre
+        .replace("\n", " ")
+        .replace("|", "-")
+        .strip()
+    )
 
     return nombre, precio, cuotas
 
 
-def guardar_ultima_tanda(productos):
-    contenido = "\n".join(productos)
+def formatear_precio(valor):
+    try:
+        numero = float(
+            str(valor)
+            .replace(",", ".")
+        )
 
+        return (
+            f"{numero:,.0f}"
+            .replace(",", ".")
+        )
+
+    except Exception:
+        return str(valor)
+
+
+def guardar_ultima_tanda(productos):
     with open(
         "ultima_tanda.txt",
         "w",
         encoding="utf-8"
     ) as archivo:
-        archivo.write(contenido)
+
+        archivo.write(
+            "\n".join(productos)
+        )
 
     print(
         "✅ ultima_tanda.txt generado correctamente"
@@ -178,19 +308,15 @@ def guardar_datos_tanda(productos):
         productos,
         start=1
     ):
+
         print(
-            f"Obteniendo datos del producto {numero}/"
-            f"{len(productos)}..."
+            f"Obteniendo datos del producto "
+            f"{numero}/{len(productos)}..."
         )
 
         nombre, precio, cuotas = (
             obtener_datos_producto(url)
         )
-
-        # Evitamos saltos de línea dentro de los datos
-        nombre = nombre.replace("\n", " ").strip()
-        precio = precio.replace("\n", " ").strip()
-        cuotas = cuotas.replace("\n", " ").strip()
 
         linea = (
             f"{nombre} | "
@@ -201,7 +327,7 @@ def guardar_datos_tanda(productos):
         lineas.append(linea)
 
         print(
-            f"  {numero}. {linea}"
+            f"   {numero}. {linea}"
         )
 
     with open(
@@ -209,6 +335,7 @@ def guardar_datos_tanda(productos):
         "w",
         encoding="utf-8"
     ) as archivo:
+
         archivo.write(
             "\n".join(lineas)
         )
@@ -224,17 +351,27 @@ if __name__ == "__main__":
         "--- EXTRAYENDO PRODUCTOS MÁS VENDIDOS ---"
     )
 
-    productos = obtener_productos_mas_vendidos()
+    productos = (
+        obtener_productos_mas_vendidos()
+    )
 
     if productos:
+
         print(
-            f"✅ Se obtuvieron {len(productos)} productos"
+            f"✅ Se obtuvieron "
+            f"{len(productos)} productos"
         )
 
-        guardar_ultima_tanda(productos)
-        guardar_datos_tanda(productos)
+        guardar_ultima_tanda(
+            productos
+        )
+
+        guardar_datos_tanda(
+            productos
+        )
 
     else:
+
         print(
             "❌ No se pudieron extraer productos."
         )
