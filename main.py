@@ -1,8 +1,6 @@
-import os
 import random
 import requests
 from bs4 import BeautifulSoup
-import urllib.parse
 
 
 def obtener_productos_mas_vendidos():
@@ -19,12 +17,22 @@ def obtener_productos_mas_vendidos():
     links_encontrados = []
 
     try:
-        response = requests.get(url, headers=headers, timeout=15)
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=15
+        )
 
-        print(f"DEBUG Status Más Vendidos: {response.status_code}")
+        print(
+            f"DEBUG Status Más Vendidos: "
+            f"{response.status_code}"
+        )
 
         if response.status_code == 200:
-            soup = BeautifulSoup(response.text, "html.parser")
+            soup = BeautifulSoup(
+                response.text,
+                "html.parser"
+            )
 
             for a in soup.find_all("a", href=True):
                 href = a["href"]
@@ -42,26 +50,36 @@ def obtener_productos_mas_vendidos():
                         )
 
                     if link_limpio not in links_encontrados:
-                        links_encontrados.append(link_limpio)
+                        links_encontrados.append(
+                            link_limpio
+                        )
 
         else:
             print(
-                f"DEBUG Error al acceder a la página: "
+                "DEBUG Error al acceder a la página: "
                 f"{response.status_code}"
             )
 
     except Exception as e:
-        print(f"Excepción extrayendo productos: {e}")
+        print(
+            f"Excepción extrayendo productos: {e}"
+        )
 
     if len(links_encontrados) >= 10:
-        return random.sample(links_encontrados, 10)
+        return random.sample(
+            links_encontrados,
+            10
+        )
 
     return links_encontrados[:10]
 
 
 def guardar_ultima_tanda(productos):
     if not productos:
-        contenido = "No se pudieron extraer productos en esta ejecución."
+        contenido = (
+            "No se pudieron extraer productos "
+            "en esta ejecución."
+        )
     else:
         contenido = "\n".join(productos)
 
@@ -73,49 +91,13 @@ def guardar_ultima_tanda(productos):
         ) as archivo:
             archivo.write(contenido)
 
-        print("✅ ultima_tanda.txt generado correctamente")
-
-    except Exception as e:
-        print(f"❌ Error guardando ultima_tanda.txt: {e}")
-
-
-def enviar_a_whatsapp(mensaje):
-    phone = (
-        os.environ.get("WHATSAPP_PHONE", "")
-        .strip()
-        .replace("+", "")
-    )
-
-    apikey = os.environ.get(
-        "WHATSAPP_APIKEY",
-        ""
-    ).strip()
-
-    if not phone or not apikey:
-        print("⚠️ Faltan las credenciales de WhatsApp.")
-        return
-
-    mensaje_codificado = urllib.parse.quote(mensaje)
-
-    url = (
-        "https://api.textmebot.com/send.php"
-        f"?phone={phone}"
-        f"&text={mensaje_codificado}"
-        f"&apikey={apikey}"
-    )
-
-    try:
-        res = requests.get(url, timeout=15)
-
         print(
-            f"Respuesta WhatsApp: "
-            f"{res.text}"
+            "✅ ultima_tanda.txt generado correctamente"
         )
 
     except Exception as e:
         print(
-            f"Error de red WhatsApp: "
-            f"{str(e)}"
+            f"❌ Error guardando ultima_tanda.txt: {e}"
         )
 
 
@@ -128,18 +110,22 @@ if __name__ == "__main__":
     productos = obtener_productos_mas_vendidos()
 
     if productos:
-        mensaje = "\n".join(productos)
+        print(
+            f"✅ Se obtuvieron {len(productos)} productos:"
+        )
+
+        for numero, producto in enumerate(
+            productos,
+            start=1
+        ):
+            print(
+                f"{numero}. {producto}"
+            )
+
     else:
-        mensaje = (
-            "No se pudieron extraer productos "
+        print(
+            "❌ No se pudieron extraer productos "
             "en esta ejecución."
         )
 
-    print("Mensaje generado:")
-    print(mensaje)
-
     guardar_ultima_tanda(productos)
-
-    # Lo dejamos temporalmente hasta comprobar
-    # que Automate pueda leer la tanda desde GitHub.
-    enviar_a_whatsapp(mensaje)
