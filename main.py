@@ -1041,7 +1041,7 @@ def colocar_logo(imagen):
 def crear_imagen_oferta(datos, numero):
 
     nombre_archivo = (
-        f"oferta_{numero:02d}_{VERSION}.png"
+        f"oferta_final_{numero:02d}_{VERSION}.png"
     )
 
     salida = (
@@ -1366,23 +1366,48 @@ def crear_imagen_oferta(datos, numero):
         width=4
     )
 
+    # Texto centrado en todo el botón.
+    # No se dibuja ningún icono, mano, flecha ni símbolo.
+    texto_principal = "Compralo acá"
+    texto_secundario = "Tocá el link de abajo"
+
+    font_principal = fuente(43, True)
+    font_secundario = fuente(30)
+
+    caja_principal = draw.textbbox(
+        (0, 0),
+        texto_principal,
+        font=font_principal
+    )
+
+    caja_secundaria = draw.textbbox(
+        (0, 0),
+        texto_secundario,
+        font=font_secundario
+    )
+
+    ancho_principal = caja_principal[2] - caja_principal[0]
+    ancho_secundario = caja_secundaria[2] - caja_secundaria[0]
+
+    centro_x = (55 + 1025) // 2
+
     draw.text(
         (
-            100,
+            centro_x - ancho_principal // 2,
             boton_y + 24
         ),
-        "Compralo acá",
-        font=fuente(43, True),
+        texto_principal,
+        font=font_principal,
         fill=(0, 100, 55)
     )
 
     draw.text(
         (
-            100,
+            centro_x - ancho_secundario // 2,
             boton_y + 82
         ),
-        "Tocá el link de abajo",
-        font=fuente(30),
+        texto_secundario,
+        font=font_secundario,
         fill=(60, 70, 80)
     )
 
@@ -1511,6 +1536,8 @@ def main():
     guardar_tanda(
         productos
     )
+
+    print("✅ DISEÑO FINAL SIN ICONO")
 
     print(
         "✅ PROCESO COMPLETO FINALIZADO"
