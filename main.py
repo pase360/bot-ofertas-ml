@@ -1035,86 +1035,6 @@ def colocar_logo(imagen):
 
 
 # =========================================================
-# MANO APUNTANDO HACIA ABAJO
-# =========================================================
-
-def dibujar_mano_abajo(draw, x, y):
-
-    verde = (0, 105, 65)
-
-    # Palma
-    draw.rounded_rectangle(
-        (
-            x,
-            y,
-            x + 62,
-            y + 48
-        ),
-        radius=17,
-        outline=verde,
-        width=8
-    )
-
-    # Dedo
-    draw.rounded_rectangle(
-        (
-            x + 22,
-            y + 35,
-            x + 42,
-            y + 92
-        ),
-        radius=10,
-        fill=verde
-    )
-
-    # Pulgar
-    draw.line(
-        (
-            x + 4,
-            y + 28,
-            x - 18,
-            y + 48
-        ),
-        fill=verde,
-        width=8
-    )
-
-    # Rayitas debajo
-    draw.line(
-        (
-            x + 32,
-            y + 102,
-            x + 32,
-            y + 119
-        ),
-        fill=verde,
-        width=5
-    )
-
-    draw.line(
-        (
-            x + 10,
-            y + 98,
-            x,
-            y + 111
-        ),
-        fill=verde,
-        width=5
-    )
-
-    draw.line(
-        (
-            x + 54,
-            y + 98,
-            x + 65,
-            y + 111
-        ),
-        fill=verde,
-        width=5
-    )
-
-
-# =========================================================
 # CREAR PLACA FINAL
 # =========================================================
 
@@ -1464,12 +1384,6 @@ def crear_imagen_oferta(datos, numero):
         "Tocá el link de abajo",
         font=fuente(30),
         fill=(60, 70, 80)
-    )
-
-    dibujar_mano_abajo(
-        draw,
-        845,
-        boton_y + 27
     )
 
     imagen.save(
