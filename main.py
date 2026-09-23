@@ -11,14 +11,7 @@ from bs4 import BeautifulSoup, Tag
 from PIL import Image, ImageDraw, ImageFont
 
 
-# =========================================================
-# CONFIGURACION
-# =========================================================
-
-URL_MAS_VENDIDOS = (
-    "https://www.mercadolibre.com.ar/mas-vendidos"
-)
-
+URL_MAS_VENDIDOS = "https://www.mercadolibre.com.ar/mas-vendidos"
 CANTIDAD_PRODUCTOS = 10
 
 HEADERS = {
@@ -47,9 +40,7 @@ RAMA = os.getenv(
 
 VERSION = os.getenv(
     "GITHUB_RUN_ID",
-    datetime.now(
-        timezone.utc
-    ).strftime("%Y%m%d%H%M%S")
+    datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
 )
 
 RAW_BASE = (
@@ -68,33 +59,19 @@ ALTO = 1350
 def fuente(tamano, negrita=False):
 
     if negrita:
-
         candidatos = [
-            "/usr/share/fonts/truetype/dejavu/"
-            "DejaVuSans-Bold.ttf",
-
-            "/usr/share/fonts/truetype/liberation2/"
-            "LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
         ]
-
     else:
-
         candidatos = [
-            "/usr/share/fonts/truetype/dejavu/"
-            "DejaVuSans.ttf",
-
-            "/usr/share/fonts/truetype/liberation2/"
-            "LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
         ]
 
     for ruta in candidatos:
-
         if os.path.exists(ruta):
-
-            return ImageFont.truetype(
-                ruta,
-                tamano
-            )
+            return ImageFont.truetype(ruta, tamano)
 
     return ImageFont.load_default()
 
@@ -130,12 +107,12 @@ def limpiar_url(url):
 
 def es_producto(url):
 
-    if not url:
-        return False
-
-    return (
-        "/p/MLA" in url
-        or "/MLA-" in url
+    return bool(
+        url
+        and (
+            "/p/MLA" in url
+            or "/MLA-" in url
+        )
     )
 
 
@@ -143,24 +120,22 @@ def nombre_desde_url(url):
 
     try:
 
-        path = urlparse(
-            url
-        ).path
+        path = urlparse(url).path
 
         partes = [
-            p
-            for p in path.split("/")
-            if p
+            parte
+            for parte in path.split("/")
+            if parte
         ]
 
         candidato = ""
 
         for parte in partes:
 
-            if parte.startswith("MLA"):
+            if parte == "p":
                 continue
 
-            if parte == "p":
+            if parte.upper().startswith("MLA"):
                 continue
 
             if len(parte) > len(candidato):
@@ -172,12 +147,9 @@ def nombre_desde_url(url):
             .replace("_", " ")
         )
 
-        candidato = limpiar_texto(
-            candidato
-        )
+        candidato = limpiar_texto(candidato)
 
         if candidato:
-
             return candidato.title()
 
     except Exception:
@@ -186,57 +158,20 @@ def nombre_desde_url(url):
     return "Producto Mercado Libre"
 
 
-def buscar_texto(
-    contenedor,
-    selectores
-):
-
-    for selector in selectores:
-
-        try:
-
-            elemento = contenedor.select_one(
-                selector
-            )
-
-            if elemento:
-
-                texto = limpiar_texto(
-                    elemento.get_text(
-                        " ",
-                        strip=True
-                    )
-                )
-
-                if texto:
-                    return texto
-
-        except Exception:
-            pass
-
-    return ""
-
-
 # =========================================================
-# CONTENEDOR DEL PRODUCTO
+# CONTENEDOR DE PRODUCTO
 # =========================================================
 
-def encontrar_contenedor(
-    enlace
-):
+def encontrar_contenedor(enlace):
 
     nodo = enlace
-
-    mejor = None
+    candidatos = []
 
     for _ in range(10):
 
         nodo = nodo.parent
 
-        if not isinstance(
-            nodo,
-            Tag
-        ):
+        if not isinstance(nodo, Tag):
             break
 
         texto = limpiar_texto(
@@ -249,49 +184,49 @@ def encontrar_contenedor(
         if not texto:
             continue
 
-        if len(texto) > 2500:
+        if len(texto) > 3000:
             continue
 
         tiene_precio = "$" in texto
+        tiene_imagen = nodo.find("img") is not None
 
-        tiene_imagen = (
-            nodo.find("img")
-            is not None
+        tiene_datos = bool(
+            re.search(
+                r"vendidos|cuotas|%\s*OFF|MÁS VENDIDO|MAS VENDIDO",
+                texto,
+                re.IGNORECASE
+            )
         )
 
-        if (
-            tiene_precio
-            and tiene_imagen
-        ):
+        if tiene_precio and tiene_imagen:
 
-            mejor = nodo
-
-            clases = " ".join(
-                nodo.get(
-                    "class",
-                    []
+            candidatos.append(
+                (
+                    nodo,
+                    tiene_datos,
+                    len(texto)
                 )
-            ).lower()
+            )
 
-            if (
-                "poly-card" in clases
-                or "ui-search" in clases
-                or "andes-card" in clases
-            ):
+            if tiene_datos:
                 return nodo
 
-    return mejor or enlace.parent
+    if candidatos:
+
+        candidatos.sort(
+            key=lambda item: item[2]
+        )
+
+        return candidatos[0][0]
+
+    return enlace.parent
 
 
 # =========================================================
-# NOMBRE PRODUCTO
+# NOMBRE
 # =========================================================
 
-def obtener_nombre(
-    contenedor,
-    enlace,
-    url
-):
+def obtener_nombre(contenedor, enlace, url):
 
     selectores = [
         ".poly-component__title",
@@ -305,15 +240,8 @@ def obtener_nombre(
     for selector in selectores:
 
         try:
-
-            elementos = (
-                contenedor.select(
-                    selector
-                )
-            )
-
+            elementos = contenedor.select(selector)
         except Exception:
-
             elementos = []
 
         for elemento in elementos:
@@ -325,38 +253,30 @@ def obtener_nombre(
                 )
             )
 
-            texto_lower = (
-                texto.lower()
-            )
+            inferior = texto.lower()
 
-            if not (
-                8
-                <= len(texto)
-                <= 220
-            ):
+            if not 8 <= len(texto) <= 220:
                 continue
 
             if "$" in texto:
                 continue
 
-            if "% off" in texto_lower:
+            if "off" in inferior:
                 continue
 
-            if "más vendido" in texto_lower:
+            if "más vendido" in inferior:
                 continue
 
-            if "mas vendido" in texto_lower:
+            if "mas vendido" in inferior:
                 continue
 
-            if "envío gratis" in texto_lower:
+            if "envío gratis" in inferior:
                 continue
 
-            if "envio gratis" in texto_lower:
+            if "envio gratis" in inferior:
                 continue
 
             return texto
-
-    # TITLE / ARIA-LABEL
 
     for atributo in [
         "title",
@@ -370,18 +290,10 @@ def obtener_nombre(
             )
         )
 
-        if (
-            8
-            <= len(valor)
-            <= 220
-        ):
+        if 8 <= len(valor) <= 220:
             return valor
 
-    # ALT DE IMAGEN
-
-    for imagen in contenedor.find_all(
-        "img"
-    ):
+    for imagen in contenedor.find_all("img"):
 
         alt = limpiar_texto(
             imagen.get(
@@ -391,32 +303,21 @@ def obtener_nombre(
         )
 
         if (
-            8
-            <= len(alt)
-            <= 220
+            8 <= len(alt) <= 220
+            and "$" not in alt
         ):
+            return alt
 
-            if "$" not in alt:
-                return alt
-
-    # URL COMO ULTIMO RECURSO
-
-    return nombre_desde_url(
-        url
-    )
+    return nombre_desde_url(url)
 
 
 # =========================================================
-# IMAGEN PRODUCTO
+# IMAGEN
 # =========================================================
 
-def obtener_url_imagen(
-    contenedor
-):
+def obtener_url_imagen(contenedor):
 
-    for imagen in contenedor.find_all(
-        "img"
-    ):
+    for imagen in contenedor.find_all("img"):
 
         for atributo in [
             "data-src",
@@ -424,42 +325,27 @@ def obtener_url_imagen(
             "src",
         ]:
 
-            url = imagen.get(
-                atributo
-            )
+            url = imagen.get(atributo)
 
             if (
                 url
                 and url.startswith("http")
                 and ".svg" not in url.lower()
             ):
-
                 return url
 
-        srcset = imagen.get(
-            "srcset"
-        )
+        srcset = imagen.get("srcset")
 
         if srcset:
 
             urls = []
 
-            for opcion in srcset.split(
-                ","
-            ):
+            for opcion in srcset.split(","):
 
-                url = (
-                    opcion
-                    .strip()
-                    .split(" ")[0]
-                )
+                url = opcion.strip().split(" ")[0]
 
-                if url.startswith(
-                    "http"
-                ):
-                    urls.append(
-                        url
-                    )
+                if url.startswith("http"):
+                    urls.append(url)
 
             if urls:
                 return urls[-1]
@@ -471,9 +357,7 @@ def obtener_url_imagen(
 # PRECIOS
 # =========================================================
 
-def leer_money_amount(
-    elemento
-):
+def leer_money_amount(elemento):
 
     if not elemento:
         return ""
@@ -488,7 +372,7 @@ def leer_money_amount(
 
     if fraction:
 
-        valor = limpiar_texto(
+        entero = limpiar_texto(
             fraction.get_text()
         )
 
@@ -501,12 +385,12 @@ def leer_money_amount(
             if centavos:
                 return (
                     "$ "
-                    + valor
+                    + entero
                     + ","
                     + centavos
                 )
 
-        return "$ " + valor
+        return "$ " + entero
 
     texto = limpiar_texto(
         elemento.get_text(
@@ -521,140 +405,145 @@ def leer_money_amount(
     )
 
     if match:
-
-        return (
-            "$ "
-            + match.group(1)
-        )
+        return "$ " + match.group(1)
 
     return ""
 
 
-def obtener_precio_actual(
-    contenedor
-):
+def extraer_importes_texto(texto):
 
-    selectores = [
-        ".poly-price__current "
-        ".andes-money-amount",
-
-        ".ui-search-price__second-line "
-        ".andes-money-amount",
-
-        "[class*='current'] "
-        ".andes-money-amount",
-    ]
-
-    for selector in selectores:
-
-        elemento = contenedor.select_one(
-            selector
-        )
-
-        valor = leer_money_amount(
-            elemento
-        )
-
-        if valor:
-            return valor
-
-    # FALLBACK
-
-    todos = contenedor.select(
-        ".andes-money-amount"
+    encontrados = re.findall(
+        r"\$\s*([\d\.]+(?:,\d+)?)",
+        texto
     )
 
-    for elemento in todos:
+    resultado = []
 
-        clases = " ".join(
-            elemento.get(
-                "class",
-                []
-            )
-        ).lower()
+    for valor in encontrados:
 
-        padre_clases = ""
+        importe = "$ " + valor
 
-        if elemento.parent:
+        if importe not in resultado:
+            resultado.append(importe)
 
-            padre_clases = " ".join(
-                elemento.parent.get(
-                    "class",
-                    []
-                )
-            ).lower()
-
-        combinado = (
-            clases
-            + " "
-            + padre_clases
-        )
-
-        if (
-            "previous" in combinado
-            or "original" in combinado
-        ):
-            continue
-
-        valor = leer_money_amount(
-            elemento
-        )
-
-        if valor:
-            return valor
-
-    return "Precio no disponible"
+    return resultado
 
 
-def obtener_precio_anterior(
-    contenedor
-):
+def obtener_precios(contenedor, texto, descuento):
 
-    selectores = [
+    precio = ""
+    precio_anterior = ""
+
+    # Primero intentamos leer por estructura HTML.
+    anteriores = [
         ".andes-money-amount--previous",
-
-        ".poly-price__original "
-        ".andes-money-amount",
-
-        ".ui-search-price__original-value "
-        ".andes-money-amount",
-
-        "[class*='original'] "
-        ".andes-money-amount",
-
-        "[class*='previous'] "
-        ".andes-money-amount",
+        ".poly-price__original .andes-money-amount",
+        ".ui-search-price__original-value .andes-money-amount",
+        "[class*='original'] .andes-money-amount",
+        "[class*='previous'] .andes-money-amount",
     ]
 
-    for selector in selectores:
+    for selector in anteriores:
 
-        elemento = contenedor.select_one(
-            selector
-        )
+        elemento = contenedor.select_one(selector)
 
-        valor = leer_money_amount(
-            elemento
-        )
+        valor = leer_money_amount(elemento)
 
         if valor:
-            return valor
 
-    return ""
+            precio_anterior = valor
+            break
+
+    actuales = [
+        ".poly-price__current .andes-money-amount",
+        ".ui-search-price__second-line .andes-money-amount",
+        "[class*='current'] .andes-money-amount",
+    ]
+
+    for selector in actuales:
+
+        elemento = contenedor.select_one(selector)
+
+        valor = leer_money_amount(elemento)
+
+        if valor:
+
+            precio = valor
+            break
+
+    # Si Mercado Libre cambió las clases, buscamos todos
+    # los bloques de dinero.
+    if not precio:
+
+        valores = []
+
+        for elemento in contenedor.select(
+            ".andes-money-amount"
+        ):
+
+            valor = leer_money_amount(
+                elemento
+            )
+
+            if (
+                valor
+                and valor not in valores
+            ):
+                valores.append(valor)
+
+        if valores:
+
+            if (
+                descuento
+                and len(valores) >= 2
+            ):
+
+                if not precio_anterior:
+                    precio_anterior = valores[0]
+
+                precio = valores[1]
+
+            else:
+
+                precio = valores[0]
+
+    # Último método: texto visible completo.
+    if not precio:
+
+        importes = extraer_importes_texto(
+            texto
+        )
+
+        if importes:
+
+            if (
+                descuento
+                and len(importes) >= 2
+            ):
+
+                if not precio_anterior:
+                    precio_anterior = importes[0]
+
+                precio = importes[1]
+
+            else:
+
+                precio = importes[0]
+
+    if not precio:
+        precio = "Precio no disponible"
+
+    return precio, precio_anterior
 
 
 # =========================================================
-# EXTRAER DATOS TARJETA
+# DATOS DE CADA PRODUCTO
 # =========================================================
 
-def extraer_datos_tarjeta(
-    enlace,
-    contenedor
-):
+def extraer_datos_tarjeta(enlace, contenedor):
 
     url = limpiar_url(
-        enlace.get(
-            "href"
-        )
+        enlace.get("href")
     )
 
     texto = limpiar_texto(
@@ -670,110 +559,52 @@ def extraer_datos_tarjeta(
         url
     )
 
-    precio = obtener_precio_actual(
-        contenedor
-    )
-
-    precio_anterior = (
-        obtener_precio_anterior(
-            contenedor
-        )
-    )
-
-    # -----------------------------------------------------
     # DESCUENTO
-    # -----------------------------------------------------
 
-    descuento = buscar_texto(
-        contenedor,
-        [
-            ".andes-money-amount__discount",
+    descuento = ""
 
-            "[class*='discount']",
-        ]
+    match = re.search(
+        r"(\d{1,2}%\s*OFF)",
+        texto,
+        re.IGNORECASE
     )
 
-    if descuento:
+    if match:
 
-        match = re.search(
-            r"(\d{1,2}%\s*OFF)",
-            descuento,
-            re.IGNORECASE
+        descuento = (
+            match.group(1)
+            .upper()
         )
 
-        if match:
+    # PRECIOS
 
-            descuento = (
-                match.group(1)
-                .upper()
-            )
+    precio, precio_anterior = obtener_precios(
+        contenedor,
+        texto,
+        descuento
+    )
 
-        else:
-
-            descuento = ""
-
-    if not descuento:
-
-        match = re.search(
-            r"(\d{1,2}%\s*OFF)",
-            texto,
-            re.IGNORECASE
-        )
-
-        if match:
-
-            descuento = (
-                match.group(1)
-                .upper()
-            )
-
-    # -----------------------------------------------------
     # CUOTAS
-    # -----------------------------------------------------
 
-    cuotas = buscar_texto(
-        contenedor,
-        [
-            "[class*='installment']",
+    cuotas = ""
 
-            "[class*='payment']",
-        ]
-    )
+    patrones_cuotas = [
+        (
+            r"((?:Mismo precio(?: en)?\s+)?"
+            r"\d{1,2}\s+cuotas"
+            r"(?:\s+sin\s+inter[eé]s)?"
+            r"(?:\s+de\s+\$\s*[\d\.\,]+)?)"
+        ),
+        (
+            r"(\d{1,2}\s+cuotas"
+            r"(?:\s+de\s+\$\s*[\d\.\,]+)?)"
+        ),
+    ]
 
-    if cuotas:
-
-        match = re.search(
-            (
-                r"((?:Mismo precio(?: en)?\s+)?"
-                r"\d{1,2}\s+cuotas"
-                r"(?:\s+sin\s+inter[eé]s)?"
-                r"(?:\s+de\s+\$\s*"
-                r"[\d\.\,]+)?)"
-            ),
-            cuotas,
-            re.IGNORECASE
-        )
-
-        if match:
-
-            cuotas = limpiar_texto(
-                match.group(1)
-            )
-
-        else:
-
-            cuotas = ""
-
-    if not cuotas:
+    for patron in patrones_cuotas:
 
         match = re.search(
-            (
-                r"((?:Mismo precio(?: en)?\s+)?"
-                r"\d{1,2}\s+cuotas"
-                r"(?:\s+sin\s+inter[eé]s)?"
-                r"(?:\s+de\s+\$\s*"
-                r"[\d\.\,]+)?)"
-            ),
+            patron,
             texto,
             re.IGNORECASE
         )
@@ -784,13 +615,12 @@ def extraer_datos_tarjeta(
                 match.group(1)
             )
 
-    if not cuotas:
+            break
 
+    if not cuotas:
         cuotas = "Consultar cuotas"
 
-    # -----------------------------------------------------
     # RANKING
-    # -----------------------------------------------------
 
     ranking = ""
 
@@ -807,24 +637,29 @@ def extraer_datos_tarjeta(
             + "º MÁS VENDIDO"
         )
 
-    # -----------------------------------------------------
     # CALIFICACION
-    # -----------------------------------------------------
 
     rating = ""
 
-    selectores_rating = [
+    for selector in [
         ".poly-reviews__rating",
         ".ui-search-reviews__rating-number",
         "[class*='rating']",
-    ]
+    ]:
 
-    texto_rating = buscar_texto(
-        contenedor,
-        selectores_rating
-    )
+        elemento = contenedor.select_one(
+            selector
+        )
 
-    if texto_rating:
+        if not elemento:
+            continue
+
+        texto_rating = limpiar_texto(
+            elemento.get_text(
+                " ",
+                strip=True
+            )
+        )
 
         match = re.search(
             r"\b([1-5](?:[\.,]\d)?)\b",
@@ -841,9 +676,9 @@ def extraer_datos_tarjeta(
                 )
             )
 
-    # -----------------------------------------------------
+            break
+
     # VENDIDOS
-    # -----------------------------------------------------
 
     vendidos = ""
 
@@ -882,13 +717,13 @@ def extraer_datos_tarjeta(
 
 
 # =========================================================
-# OBTENER MAS VENDIDOS
+# OBTENER PRODUCTOS
 # =========================================================
 
 def obtener_productos():
 
     print(
-        "--- DESCARGANDO MAS VENDIDOS ---"
+        "--- DESCARGANDO MÁS VENDIDOS ---"
     )
 
     response = requests.get(
@@ -917,14 +752,10 @@ def obtener_productos():
     ):
 
         url = limpiar_url(
-            enlace.get(
-                "href"
-            )
+            enlace.get("href")
         )
 
-        if not es_producto(
-            url
-        ):
+        if not es_producto(url):
             continue
 
         if "mas-vendidos" in url:
@@ -954,7 +785,7 @@ def obtener_productos():
             datos["precio"]
             != "Precio no disponible"
         ):
-            puntos += 5
+            puntos += 6
 
         if datos["imagen_url"]:
             puntos += 4
@@ -971,9 +802,6 @@ def obtener_productos():
         if datos["ranking"]:
             puntos += 1
 
-        if datos["vendidos"]:
-            puntos += 1
-
         anterior = encontrados.get(
             url
         )
@@ -984,7 +812,6 @@ def obtener_productos():
         ):
 
             datos["_puntos"] = puntos
-
             encontrados[url] = datos
 
     productos = list(
@@ -1002,25 +829,32 @@ def obtener_productos():
         len(productos)
     )
 
+    # Elegimos primero solamente productos
+    # que tengan foto Y precio.
     validos = [
         producto
         for producto in productos
         if (
             producto["precio"]
             != "Precio no disponible"
-            and
-            producto["imagen_url"]
-            and
-            producto["nombre"]
+            and producto["imagen_url"]
+            and producto["nombre"]
             != "Producto Mercado Libre"
         )
     ]
 
-    candidatos = (
-        validos[:40]
-        if len(validos) >= 10
-        else productos[:40]
+    print(
+        "Productos con precio válido:",
+        len(validos)
     )
+
+    if len(validos) >= CANTIDAD_PRODUCTOS:
+
+        candidatos = validos[:40]
+
+    else:
+
+        candidatos = productos[:40]
 
     if len(candidatos) >= CANTIDAD_PRODUCTOS:
 
@@ -1042,6 +876,7 @@ def obtener_productos():
             f"{numero}. "
             f"{producto['nombre']} | "
             f"{producto['precio']} | "
+            f"{producto['precio_anterior']} | "
             f"{producto['descuento']} | "
             f"{producto['cuotas']}"
         )
@@ -1050,12 +885,10 @@ def obtener_productos():
 
 
 # =========================================================
-# DESCARGAR FOTO
+# DESCARGAR IMAGEN
 # =========================================================
 
-def descargar_imagen(
-    url
-):
+def descargar_imagen(url):
 
     if not url:
         return None
@@ -1076,9 +909,7 @@ def descargar_imagen(
             )
         )
 
-        return imagen.convert(
-            "RGBA"
-        )
+        return imagen.convert("RGBA")
 
     except Exception as e:
 
@@ -1091,7 +922,7 @@ def descargar_imagen(
 
 
 # =========================================================
-# AJUSTAR TEXTO
+# TEXTO EN PLACA
 # =========================================================
 
 def ajustar_texto(
@@ -1109,7 +940,6 @@ def ajustar_texto(
         return [""]
 
     lineas = []
-
     linea = palabras[0]
 
     for palabra in palabras[1:]:
@@ -1143,9 +973,7 @@ def ajustar_texto(
 
             linea = palabra
 
-    lineas.append(
-        linea
-    )
+    lineas.append(linea)
 
     return lineas
 
@@ -1186,18 +1014,15 @@ def dibujar_lineas(
 
 
 # =========================================================
-# LOGO REAL
+# LOGO
 # =========================================================
 
-def colocar_logo(
-    imagen
-):
+def colocar_logo(imagen):
 
     if not LOGO_PATH.exists():
 
         print(
-            "ADVERTENCIA: "
-            "logo_cazadores.png no encontrado"
+            "ADVERTENCIA: logo_cazadores.png no encontrado"
         )
 
         return
@@ -1206,43 +1031,32 @@ def colocar_logo(
 
         logo = Image.open(
             LOGO_PATH
-        ).convert(
-            "RGBA"
-        )
+        ).convert("RGBA")
 
         logo.thumbnail(
-            (
-                150,
-                150
-            ),
+            (150, 150),
             Image.LANCZOS
         )
 
-        x = 58
-        y = 38
-
         imagen.paste(
             logo,
-            (x, y),
+            (58, 38),
             logo
         )
 
     except Exception as e:
 
         print(
-            "ERROR cargando logo:",
+            "ERROR logo:",
             e
         )
 
 
 # =========================================================
-# CREAR PLACA FINAL
+# CREAR PLACA
 # =========================================================
 
-def crear_imagen_oferta(
-    datos,
-    numero
-):
+def crear_imagen_oferta(datos, numero):
 
     nombre_archivo = (
         f"oferta_{numero:02d}_{VERSION}.png"
@@ -1255,22 +1069,11 @@ def crear_imagen_oferta(
 
     imagen = Image.new(
         "RGB",
-        (
-            ANCHO,
-            ALTO
-        ),
-        (
-            247,
-            247,
-            245
-        )
+        (ANCHO, ALTO),
+        (247, 247, 245)
     )
 
-    draw = ImageDraw.Draw(
-        imagen
-    )
-
-    # TARJETA
+    draw = ImageDraw.Draw(imagen)
 
     draw.rounded_rectangle(
         (
@@ -1280,61 +1083,28 @@ def crear_imagen_oferta(
             1328
         ),
         radius=40,
-        fill=(
-            255,
-            255,
-            255
-        ),
-        outline=(
-            225,
-            225,
-            225
-        ),
+        fill=(255, 255, 255),
+        outline=(225, 225, 225),
         width=2
     )
 
-    # LOGO
-
-    colocar_logo(
-        imagen
-    )
-
-    # TITULO CANAL
+    colocar_logo(imagen)
 
     draw.text(
-        (
-            230,
-            55
-        ),
+        (230, 55),
         "Cazadores de Ofertas",
-        font=fuente(
-            47,
-            True
-        ),
-        fill=(
-            10,
-            10,
-            10
-        )
+        font=fuente(47, True),
+        fill=(10, 10, 10)
     )
 
     draw.text(
-        (
-            232,
-            116
-        ),
+        (232, 116),
         "Las mejores ofertas, todos los días",
-        font=fuente(
-            27
-        ),
-        fill=(
-            75,
-            75,
-            75
-        )
+        font=fuente(27),
+        fill=(75, 75, 75)
     )
 
-    # FOTO PRODUCTO
+    # FOTO
 
     producto = descargar_imagen(
         datos["imagen_url"]
@@ -1349,11 +1119,8 @@ def crear_imagen_oferta(
 
         producto.thumbnail(
             (
-                area_x1
-                - area_x0,
-
-                area_y1
-                - area_y0
+                area_x1 - area_x0,
+                area_y1 - area_y0
             ),
             Image.LANCZOS
         )
@@ -1384,14 +1151,11 @@ def crear_imagen_oferta(
 
         imagen.paste(
             producto,
-            (
-                x,
-                y
-            ),
+            (x, y),
             producto
         )
 
-    # MAS VENDIDO
+    # MÁS VENDIDO
 
     y = 585
 
@@ -1403,11 +1167,7 @@ def crear_imagen_oferta(
             y + 64
         ),
         radius=13,
-        fill=(
-            255,
-            92,
-            20
-        )
+        fill=(255, 92, 20)
     )
 
     etiqueta = (
@@ -1422,14 +1182,11 @@ def crear_imagen_oferta(
             y + 13
         ),
         etiqueta[:24],
-        font=fuente(
-            29,
-            True
-        ),
+        font=fuente(29, True),
         fill="white"
     )
 
-    # NOMBRE PRODUCTO
+    # NOMBRE
 
     y += 90
 
@@ -1451,27 +1208,20 @@ def crear_imagen_oferta(
         65,
         y,
         font_titulo,
-        (
-            10,
-            10,
-            10
-        ),
+        (10, 10, 10),
         5
     )
 
-    # RATING Y VENDIDOS
+    # RATING
 
     metadata = []
 
     if datos["rating"]:
-
         metadata.append(
-            "★ "
-            + datos["rating"]
+            "★ " + datos["rating"]
         )
 
     if datos["vendidos"]:
-
         metadata.append(
             datos["vendidos"]
         )
@@ -1481,22 +1231,12 @@ def crear_imagen_oferta(
         y += 6
 
         draw.text(
-            (
-                65,
-                y
-            ),
+            (65, y),
             "  |  ".join(
                 metadata
             ),
-            font=fuente(
-                29,
-                True
-            ),
-            fill=(
-                35,
-                35,
-                35
-            )
+            font=fuente(29, True),
+            fill=(35, 35, 35)
         )
 
         y += 50
@@ -1505,50 +1245,34 @@ def crear_imagen_oferta(
 
     if datos["precio_anterior"]:
 
-        font_anterior = fuente(
-            34
-        )
+        font_anterior = fuente(34)
 
         draw.text(
-            (
-                65,
-                y
-            ),
+            (65, y),
             datos["precio_anterior"],
             font=font_anterior,
-            fill=(
-                105,
-                105,
-                105
-            )
+            fill=(105, 105, 105)
         )
 
-        caja_anterior = draw.textbbox(
-            (
-                65,
-                y
-            ),
+        caja = draw.textbbox(
+            (65, y),
             datos["precio_anterior"],
             font=font_anterior
         )
 
-        altura_linea = (
-            caja_anterior[1]
-            + caja_anterior[3]
+        medio = (
+            caja[1]
+            + caja[3]
         ) // 2
 
         draw.line(
             (
-                caja_anterior[0],
-                altura_linea,
-                caja_anterior[2],
-                altura_linea
+                caja[0],
+                medio,
+                caja[2],
+                medio
             ),
-            fill=(
-                105,
-                105,
-                105
-            ),
+            fill=(105, 105, 105),
             width=3
         )
 
@@ -1562,24 +1286,14 @@ def crear_imagen_oferta(
     )
 
     draw.text(
-        (
-            65,
-            y
-        ),
+        (65, y),
         datos["precio"],
         font=font_precio,
-        fill=(
-            0,
-            148,
-            76
-        )
+        fill=(0, 148, 76)
     )
 
     caja_precio = draw.textbbox(
-        (
-            65,
-            y
-        ),
+        (65, y),
         datos["precio"],
         font=font_precio
     )
@@ -1589,8 +1303,7 @@ def crear_imagen_oferta(
     if datos["descuento"]:
 
         x_desc = min(
-            caja_precio[2]
-            + 25,
+            caja_precio[2] + 25,
             800
         )
 
@@ -1602,11 +1315,7 @@ def crear_imagen_oferta(
                 y + 70
             ),
             radius=10,
-            fill=(
-                0,
-                153,
-                82
-            )
+            fill=(0, 153, 82)
         )
 
         draw.text(
@@ -1615,10 +1324,7 @@ def crear_imagen_oferta(
                 y + 18
             ),
             datos["descuento"],
-            font=fuente(
-                30,
-                True
-            ),
+            font=fuente(30, True),
             fill="white"
         )
 
@@ -1627,58 +1333,28 @@ def crear_imagen_oferta(
     # CUOTAS
 
     draw.text(
-        (
-            65,
-            y
-        ),
+        (65, y),
         datos["cuotas"][:85],
-        font=fuente(
-            33,
-            True
-        ),
-        fill=(
-            25,
-            25,
-            25
-        )
+        font=fuente(33, True),
+        fill=(25, 25, 25)
     )
 
     y += 68
 
-    # INFO
-
     draw.text(
-        (
-            65,
-            y
-        ),
-        "✓ Oferta disponible en Mercado Libre",
-        font=fuente(
-            27
-        ),
-        fill=(
-            60,
-            60,
-            60
-        )
+        (65, y),
+        "Oferta disponible en Mercado Libre",
+        font=fuente(27),
+        fill=(60, 60, 60)
     )
 
     y += 43
 
     draw.text(
-        (
-            65,
-            y
-        ),
-        "✓ Precio y disponibilidad pueden variar",
-        font=fuente(
-            27
-        ),
-        fill=(
-            60,
-            60,
-            60
-        )
+        (65, y),
+        "Precio y disponibilidad pueden variar",
+        font=fuente(27),
+        fill=(60, 60, 60)
     )
 
     # CTA VISUAL
@@ -1693,16 +1369,8 @@ def crear_imagen_oferta(
             boton_y + 130
         ),
         radius=30,
-        fill=(
-            220,
-            248,
-            228
-        ),
-        outline=(
-            70,
-            220,
-            120
-        ),
+        fill=(220, 248, 228),
+        outline=(70, 220, 120),
         width=3
     )
 
@@ -1712,15 +1380,8 @@ def crear_imagen_oferta(
             boton_y + 24
         ),
         "Ver oferta en Mercado Libre",
-        font=fuente(
-            37,
-            True
-        ),
-        fill=(
-            0,
-            105,
-            55
-        )
+        font=fuente(37, True),
+        fill=(0, 105, 55)
     )
 
     draw.text(
@@ -1729,32 +1390,15 @@ def crear_imagen_oferta(
             boton_y + 77
         ),
         "Link afiliado real debajo de esta imagen",
-        font=fuente(
-            27
-        ),
-        fill=(
-            65,
-            75,
-            90
-        )
+        font=fuente(27),
+        fill=(65, 75, 90)
     )
 
-    # PIE
-
     draw.text(
-        (
-            105,
-            1295
-        ),
+        (105, 1295),
         "Si comprás desde el enlace apoyás al canal",
-        font=fuente(
-            24
-        ),
-        fill=(
-            70,
-            75,
-            90
-        )
+        font=fuente(24),
+        fill=(70, 75, 90)
     )
 
     imagen.save(
@@ -1772,7 +1416,7 @@ def crear_imagen_oferta(
 
 
 # =========================================================
-# LIMPIAR IMAGENES ANTERIORES
+# GUARDAR ARCHIVOS
 # =========================================================
 
 def limpiar_ofertas():
@@ -1782,21 +1426,12 @@ def limpiar_ofertas():
     ):
 
         try:
-
             archivo.unlink()
-
         except Exception:
-
             pass
 
 
-# =========================================================
-# GUARDAR TANDA
-# =========================================================
-
-def guardar_tanda(
-    productos
-):
+def guardar_tanda(productos):
 
     limpiar_ofertas()
 
@@ -1809,11 +1444,9 @@ def guardar_tanda(
         start=1
     ):
 
-        nombre_archivo = (
-            crear_imagen_oferta(
-                datos,
-                numero
-            )
+        archivo = crear_imagen_oferta(
+            datos,
+            numero
         )
 
         links.append(
@@ -1822,26 +1455,17 @@ def guardar_tanda(
 
         nombre = (
             datos["nombre"]
-            .replace(
-                "|",
-                "-"
-            )
+            .replace("|", "-")
         )
 
         precio = (
             datos["precio"]
-            .replace(
-                "|",
-                "-"
-            )
+            .replace("|", "-")
         )
 
         cuotas = (
             datos["cuotas"]
-            .replace(
-                "|",
-                "-"
-            )
+            .replace("|", "-")
         )
 
         datos_txt.append(
@@ -1851,48 +1475,33 @@ def guardar_tanda(
         )
 
         imagenes.append(
-            f"{RAW_BASE}/"
-            f"{nombre_archivo}"
+            f"{RAW_BASE}/{archivo}"
         )
 
     Path(
         "ultima_tanda.txt"
     ).write_text(
-        "\n".join(
-            links
-        ),
+        "\n".join(links),
         encoding="utf-8"
     )
 
     Path(
         "datos_tanda.txt"
     ).write_text(
-        "\n".join(
-            datos_txt
-        ),
+        "\n".join(datos_txt),
         encoding="utf-8"
     )
 
     Path(
         "imagenes_tanda.txt"
     ).write_text(
-        "\n".join(
-            imagenes
-        ),
+        "\n".join(imagenes),
         encoding="utf-8"
     )
 
-    print(
-        "✅ ultima_tanda.txt generado"
-    )
-
-    print(
-        "✅ datos_tanda.txt generado"
-    )
-
-    print(
-        "✅ imagenes_tanda.txt generado"
-    )
+    print("✅ ultima_tanda.txt generado")
+    print("✅ datos_tanda.txt generado")
+    print("✅ imagenes_tanda.txt generado")
 
 
 # =========================================================
