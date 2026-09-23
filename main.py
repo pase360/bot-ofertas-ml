@@ -1037,6 +1037,7 @@ def colocar_logo(imagen):
 
 # =========================================================
 # ELEMENTOS VISUALES MERCADO LIBRE / CANAL
+# Diseño fijado para reproducir la maqueta aprobada
 # =========================================================
 
 def texto_centrado(draw, texto, y, font, color, x0=0, x1=ANCHO):
@@ -1046,343 +1047,241 @@ def texto_centrado(draw, texto, y, font, color, x0=0, x1=ANCHO):
     draw.text((x, y), texto, font=font, fill=color)
 
 
-def colocar_logo_mercadolibre(imagen, x, y, ancho_max=150, alto_max=95):
+def colocar_logo_mercadolibre(imagen, x, y, ancho_max=160, alto_max=105):
     """
-    Usa logo_mercadolibre.png si existe.
-    El archivo puede ser solamente el isotipo del apretón de manos.
-    Debajo se dibuja el nombre y el slogan para mantener el aspecto aprobado.
+    La maqueta aprobada muestra el isotipo arriba y debajo el texto
+    'mercado libre' + el slogan. Si logo_mercadolibre.png existe se usa
+    como isotipo, sin alterar el resto del diseño.
     """
-
     draw = ImageDraw.Draw(imagen)
+    azul = (45, 50, 119)
+    amarillo = (255, 230, 0)
 
     if LOGO_ML_PATH.exists():
         try:
             logo = Image.open(LOGO_ML_PATH).convert("RGBA")
-            logo.thumbnail(
-                (ancho_max, alto_max),
-                Image.LANCZOS
-            )
-
+            logo.thumbnail((ancho_max, alto_max), Image.LANCZOS)
             pos_x = x + (ancho_max - logo.width) // 2
-
-            imagen.paste(
-                logo,
-                (pos_x, y),
-                logo
-            )
-
+            imagen.paste(logo, (pos_x, y), logo)
         except Exception as e:
             print("ERROR logo Mercado Libre:", e)
-
     else:
-        # Fallback visual si todavía no se subió el PNG.
+        # Respaldo visual para que el proceso no falle si falta el PNG.
         draw.ellipse(
-            (
-                x + 12,
-                y,
-                x + ancho_max - 12,
-                y + alto_max
-            ),
-            fill=(255, 230, 0),
-            outline=(45, 50, 119),
+            (x + 7, y, x + ancho_max - 7, y + alto_max),
+            fill=amarillo,
+            outline=azul,
             width=5
         )
-
         draw.text(
-            (x + 41, y + 29),
+            (x + 47, y + 31),
             "ML",
-            font=fuente(29, True),
-            fill=(45, 50, 119)
+            font=fuente(30, True),
+            fill=azul
         )
 
     texto_centrado(
-        draw,
-        "mercado",
-        y + alto_max + 2,
-        fuente(24, True),
-        (45, 50, 119),
-        x,
-        x + ancho_max
+        draw, "mercado", y + alto_max + 2,
+        fuente(29, True), azul, x - 5, x + ancho_max + 5
+    )
+    texto_centrado(
+        draw, "libre", y + alto_max + 34,
+        fuente(29, True), azul, x - 5, x + ancho_max + 5
+    )
+    texto_centrado(
+        draw, "Lo mejor", y + alto_max + 72,
+        fuente(19, True), azul, x - 12, x + ancho_max + 12
+    )
+    texto_centrado(
+        draw, "está acá", y + alto_max + 94,
+        fuente(19, True), azul, x - 12, x + ancho_max + 12
     )
 
-    texto_centrado(
-        draw,
-        "libre",
-        y + alto_max + 28,
-        fuente(24, True),
-        (45, 50, 119),
-        x,
-        x + ancho_max
-    )
-
-    texto_centrado(
-        draw,
-        "Lo mejor",
-        y + alto_max + 59,
-        fuente(15, True),
-        (45, 50, 119),
-        x,
-        x + ancho_max
-    )
-
-    texto_centrado(
-        draw,
-        "está acá",
-        y + alto_max + 76,
-        fuente(15, True),
-        (45, 50, 119),
-        x,
-        x + ancho_max
+    # Subrayado amarillo del slogan, como en la maqueta.
+    draw.line(
+        (x + 85, y + alto_max + 121, x + 145, y + alto_max + 108),
+        fill=amarillo,
+        width=9
     )
 
 
 def dibujar_icono_lupa(draw, cx, cy):
     draw.ellipse(
-        (cx - 18, cy - 18, cx + 11, cy + 11),
+        (cx - 17, cy - 17, cx + 10, cy + 10),
         outline=(15, 15, 15),
         width=4
     )
     draw.line(
-        (cx + 7, cy + 8, cx + 24, cy + 25),
+        (cx + 7, cy + 7, cx + 23, cy + 23),
         fill=(15, 15, 15),
         width=5
     )
 
 
 def dibujar_icono_simple(draw, cx, cy, tipo):
-    fondo = (255, 247, 194)
+    """Iconos de línea negra dentro de círculos amarillo pálido."""
+    fondo = (255, 246, 194)
+    negro = (20, 20, 20)
 
     draw.ellipse(
-        (cx - 32, cy - 32, cx + 32, cy + 32),
+        (cx - 34, cy - 34, cx + 34, cy + 34),
         fill=fondo
     )
 
-    color = (20, 20, 20)
-
     if tipo == "ranking":
-        # podio simple
-        draw.rectangle(
-            (cx - 21, cy + 5, cx - 8, cy + 20),
-            outline=color,
-            width=3
-        )
-        draw.rectangle(
-            (cx - 4, cy - 7, cx + 9, cy + 20),
-            outline=color,
-            width=3
-        )
-        draw.rectangle(
-            (cx + 13, cy + 1, cx + 26, cy + 20),
-            outline=color,
-            width=3
-        )
+        # podio / destacado
+        draw.rectangle((cx - 22, cy + 3, cx - 9, cy + 20), outline=negro, width=3)
+        draw.rectangle((cx - 5, cy - 9, cx + 8, cy + 20), outline=negro, width=3)
+        draw.rectangle((cx + 12, cy - 1, cx + 25, cy + 20), outline=negro, width=3)
+        draw.line((cx - 27, cy + 23, cx + 29, cy + 23), fill=negro, width=3)
 
     elif tipo == "cuotas":
-        # tres tarjetas superpuestas
-        for despl in (0, 7, 14):
-            draw.rounded_rectangle(
-                (
-                    cx - 22 + despl,
-                    cy - 16 + despl // 2,
-                    cx + 11 + despl,
-                    cy + 8 + despl // 2
-                ),
-                radius=4,
-                outline=color,
-                width=3
-            )
+        # líneas de movimiento / financiación
+        draw.line((cx - 24, cy - 7, cx + 9, cy - 7), fill=negro, width=4)
+        draw.line((cx - 17, cy + 2, cx + 22, cy + 2), fill=negro, width=4)
+        draw.line((cx - 25, cy + 12, cx + 12, cy + 12), fill=negro, width=4)
+        draw.arc((cx + 3, cy - 22, cx + 30, cy + 6), 230, 70, fill=negro, width=4)
 
     else:
-        # estrella / destacado
-        puntos = [
-            (cx, cy - 23),
-            (cx + 7, cy - 7),
-            (cx + 24, cy - 5),
-            (cx + 11, cy + 7),
-            (cx + 15, cy + 24),
-            (cx, cy + 14),
-            (cx - 15, cy + 24),
-            (cx - 11, cy + 7),
-            (cx - 24, cy - 5),
-            (cx - 7, cy - 7),
-        ]
-        draw.polygon(
-            puntos,
-            outline=color
-        )
+        # capas / producto destacado
+        capa1 = [(cx, cy - 22), (cx + 26, cy - 8), (cx, cy + 6), (cx - 26, cy - 8)]
+        capa2 = [(cx, cy - 8), (cx + 26, cy + 6), (cx, cy + 20), (cx - 26, cy + 6)]
+        draw.line(capa1 + [capa1[0]], fill=negro, width=4, joint="curve")
+        draw.line(capa2 + [capa2[0]], fill=negro, width=4, joint="curve")
 
 
 def datos_laterales(datos):
     """
-    Usa solamente información real ya extraída de Mercado Libre.
-    No inventa características técnicas del producto.
+    Conserva el MISMO lugar de tres características del modelo aprobado,
+    pero sin inventar especificaciones del producto. Se muestran únicamente
+    datos reales obtenidos de Mercado Libre.
     """
-
     resultado = []
 
     if datos.get("ranking"):
-        resultado.append(
-            ("ranking", datos["ranking"])
-        )
+        resultado.append(("ranking", datos["ranking"]))
     else:
-        resultado.append(
-            ("ranking", "Oferta seleccionada")
-        )
+        resultado.append(("ranking", "Oferta\nseleccionada"))
 
-    if (
-        datos.get("cuotas")
-        and datos["cuotas"] != "Consultar cuotas"
-    ):
-        resultado.append(
-            ("cuotas", datos["cuotas"])
-        )
+    if datos.get("cuotas") and datos["cuotas"] != "Consultar cuotas":
+        resultado.append(("cuotas", datos["cuotas"]))
     else:
-        resultado.append(
-            ("cuotas", "Consultar cuotas")
-        )
+        resultado.append(("cuotas", "Consultar\ncuotas"))
 
     if datos.get("vendidos"):
-        resultado.append(
-            ("destacado", datos["vendidos"])
-        )
+        resultado.append(("destacado", datos["vendidos"]))
     elif datos.get("rating"):
-        resultado.append(
-            ("destacado", "★ " + datos["rating"])
-        )
+        resultado.append(("destacado", "★ " + datos["rating"]))
     else:
-        resultado.append(
-            ("destacado", "Producto destacado")
-        )
+        resultado.append(("destacado", "Producto\ndestacado"))
 
     return resultado[:3]
 
 
 def dibujar_medios_pago(draw, y):
-    """
-    Bloque visual compacto igual al estilo aprobado.
-    No afirma cuotas ni beneficios específicos.
-    """
-
+    """Bloque de medios de pago con la geometría del modelo aprobado."""
     draw.rounded_rectangle(
-        (
-            70,
-            y,
-            1010,
-            y + 82
-        ),
-        radius=18,
-        fill=(247, 247, 247),
-        outline=(230, 230, 230),
+        (58, y, 1022, y + 88),
+        radius=20,
+        fill=(246, 246, 246),
+        outline=(232, 232, 232),
         width=2
     )
 
     draw.text(
-        (92, y + 25),
+        (82, y + 28),
         "Medios de pago",
-        font=fuente(25, True),
-        fill=(18, 18, 18)
+        font=fuente(27, True),
+        fill=(16, 16, 16)
     )
 
-    x = 345
+    x = 350
 
     # Mastercard
-    draw.ellipse(
-        (x, y + 22, x + 39, y + 61),
-        fill=(235, 0, 27)
-    )
-    draw.ellipse(
-        (x + 27, y + 22, x + 66, y + 61),
-        fill=(255, 153, 0)
-    )
-    x += 84
+    draw.rounded_rectangle((x - 10, y + 15, x + 75, y + 73), radius=15, fill="white")
+    draw.ellipse((x, y + 25, x + 41, y + 66), fill=(235, 0, 27))
+    draw.ellipse((x + 28, y + 25, x + 69, y + 66), fill=(255, 153, 0))
+    x += 98
 
     # VISA
-    draw.rounded_rectangle(
-        (x, y + 18, x + 94, y + 64),
-        radius=10,
-        fill="white",
-        outline=(223, 223, 223),
-        width=2
-    )
-    draw.text(
-        (x + 15, y + 28),
-        "VISA",
-        font=fuente(22, True),
-        fill=(28, 76, 151)
-    )
-    x += 106
+    draw.rounded_rectangle((x, y + 15, x + 102, y + 73), radius=15, fill="white")
+    draw.text((x + 16, y + 31), "VISA", font=fuente(23, True), fill=(29, 78, 165))
+    x += 114
 
     # AMEX
-    draw.rounded_rectangle(
-        (x, y + 18, x + 78, y + 64),
-        radius=10,
-        fill=(31, 144, 203)
-    )
-    draw.text(
-        (x + 9, y + 31),
-        "AMEX",
-        font=fuente(16, True),
-        fill="white"
-    )
-    x += 90
+    draw.rounded_rectangle((x, y + 15, x + 88, y + 73), radius=15, fill="white")
+    draw.rounded_rectangle((x + 14, y + 23, x + 74, y + 65), radius=7, fill=(31, 144, 203))
+    draw.text((x + 21, y + 31), "AM\nEX", font=fuente(13, True), fill="white", spacing=0)
+    x += 100
 
     # Mercado Pago
-    draw.rounded_rectangle(
-        (x, y + 18, x + 148, y + 64),
-        radius=10,
-        fill="white",
-        outline=(223, 223, 223),
-        width=2
-    )
-    draw.text(
-        (x + 10, y + 31),
-        "mercado pago",
-        font=fuente(16, True),
-        fill=(40, 112, 190)
-    )
-    x += 160
+    draw.rounded_rectangle((x, y + 15, x + 158, y + 73), radius=15, fill="white")
+    draw.ellipse((x + 10, y + 26, x + 48, y + 64), fill=(70, 171, 229), outline=(45, 50, 119), width=2)
+    draw.text((x + 55, y + 28), "mercado\npago", font=fuente(15, True), fill=(40, 112, 190), spacing=0)
+    x += 170
 
     # Naranja X
-    draw.rounded_rectangle(
-        (x, y + 18, x + 105, y + 64),
-        radius=10,
-        fill="white",
-        outline=(223, 223, 223),
-        width=2
-    )
-    draw.text(
-        (x + 8, y + 31),
-        "NaranjaX",
-        font=fuente(15, True),
-        fill=(230, 84, 25)
-    )
-    x += 117
+    draw.rounded_rectangle((x, y + 15, x + 100, y + 73), radius=15, fill="white")
+    draw.text((x + 28, y + 23), "N", font=fuente(31, True), fill=(230, 84, 25))
+    draw.text((x + 12, y + 55), "NaranjaX", font=fuente(10, True), fill=(230, 84, 25))
+    x += 112
 
-    draw.rounded_rectangle(
-        (x, y + 18, x + 55, y + 64),
-        radius=10,
-        fill="white",
-        outline=(223, 223, 223),
-        width=2
-    )
-    draw.text(
-        (x + 11, y + 29),
-        "+3",
-        font=fuente(19, True),
-        fill=(30, 30, 30)
-    )
+    # +3
+    draw.ellipse((x, y + 19, x + 54, y + 73), fill="white", outline=(228, 228, 228), width=2)
+    texto_centrado(draw, "+3", y + 34, fuente(18, True), (30, 30, 30), x, x + 54)
 
 
 def dibujar_aviso_independiente(draw, y):
     texto_centrado(
         draw,
-        "Canal independiente. No oficial.",
+        "Canal no oficial",
         y,
-        fuente(17, True),
-        (95, 95, 95),
+        fuente(17),
+        (135, 135, 135),
         40,
         1040
     )
+
+
+def dibujar_fondo_aprobado(draw):
+    """Decoración amarilla fija del modelo aprobado."""
+    amarillo = (255, 226, 0)
+    amarillo_suave = (255, 245, 183)
+
+    # Cinta/curva superior izquierda.
+    draw.pieslice((-105, -100, 205, 195), 285, 55, fill=amarillo)
+    draw.pieslice((-82, -77, 180, 168), 285, 55, fill=(255, 255, 255))
+
+    # Gran círculo pálido detrás del producto.
+    draw.ellipse((330, 260, 800, 725), fill=amarillo_suave)
+
+    # Forma amarilla del lateral derecho.
+    draw.polygon(
+        [(930, 500), (1052, 575), (1052, 760), (972, 720), (905, 610)],
+        fill=(255, 228, 42)
+    )
+
+    # Rayos de acento a la derecha del producto.
+    draw.line((1002, 455, 1032, 420), fill=amarillo, width=11)
+    draw.line((1015, 500, 1048, 492), fill=amarillo, width=11)
+    draw.line((980, 442, 995, 408), fill=amarillo, width=11)
+
+    # Esquinas inferiores amarillas.
+    draw.polygon([(28, 1145), (28, 1325), (188, 1325)], fill=amarillo)
+    draw.polygon([(1052, 1125), (1052, 1325), (885, 1325)], fill=amarillo)
+
+
+def titulo_que_cabe(draw, texto, ancho_max, max_lineas=2):
+    """Busca el mayor tamaño de título que quepa en dos líneas."""
+    for tamano in range(48, 31, -1):
+        f = fuente(tamano, True)
+        lineas = ajustar_texto(draw, texto, f, ancho_max)
+        if len(lineas) <= max_lineas:
+            return f, lineas
+
+    f = fuente(31, True)
+    lineas = ajustar_texto(draw, texto, f, ancho_max)
+    return f, lineas[:max_lineas]
 
 
 # =========================================================
@@ -1391,445 +1290,237 @@ def dibujar_aviso_independiente(draw, y):
 
 def crear_imagen_oferta(datos, numero):
 
-    nombre_archivo = (
-        f"oferta_final_{numero:02d}_{VERSION}.png"
-    )
+    nombre_archivo = f"oferta_final_{numero:02d}_{VERSION}.png"
+    salida = CARPETA_OFERTAS / nombre_archivo
 
-    salida = (
-        CARPETA_OFERTAS
-        / nombre_archivo
-    )
-
-    imagen = Image.new(
-        "RGB",
-        (ANCHO, ALTO),
-        (247, 247, 245)
-    )
-
+    # El modelo aprobado tiene una tarjeta blanca con borde redondeado sobre gris.
+    imagen = Image.new("RGB", (ANCHO, ALTO), (246, 246, 246))
     draw = ImageDraw.Draw(imagen)
 
-    # TARJETA BLANCA PRINCIPAL
-
     draw.rounded_rectangle(
-        (
-            28,
-            22,
-            1052,
-            1325
-        ),
-        radius=38,
+        (20, 18, 1060, 1332),
+        radius=48,
         fill=(255, 255, 255),
-        outline=(231, 231, 231),
+        outline=(232, 232, 232),
         width=2
     )
 
-    # =====================================================
-    # CABECERA: IGUAL AL DISEÑO APROBADO
-    # =====================================================
+    # Elementos amarillos de fondo ANTES del contenido.
+    dibujar_fondo_aprobado(draw)
 
+    # -----------------------------------------------------
+    # CABECERA
+    # -----------------------------------------------------
     colocar_logo(imagen)
 
     draw.text(
-        (225, 53),
+        (225, 49),
         "Cazadores de Ofertas",
-        font=fuente(43, True),
-        fill=(10, 10, 10)
+        font=fuente(45, True),
+        fill=(8, 8, 8)
     )
 
     draw.text(
-        (227, 105),
+        (227, 104),
         "Las mejores ofertas, todos los días",
-        font=fuente(23),
-        fill=(72, 72, 72)
+        font=fuente(24),
+        fill=(62, 62, 62)
+    )
+
+    # Subrayado amarillo debajo del subtítulo.
+    draw.rounded_rectangle(
+        (228, 149, 333, 158),
+        radius=4,
+        fill=(255, 226, 0)
     )
 
     colocar_logo_mercadolibre(
         imagen,
-        840,
-        35,
-        135,
-        72
+        835,
+        33,
+        150,
+        86
     )
 
-    # BANDA AMARILLA "OFERTA ENCONTRADA..."
-
-    banda_x0 = 78
-    banda_y0 = 170
-    banda_x1 = 695
-    banda_y1 = 228
-
+    # -----------------------------------------------------
+    # BANDA "Oferta encontrada en Mercado Libre"
+    # -----------------------------------------------------
     draw.rounded_rectangle(
-        (
-            banda_x0,
-            banda_y0,
-            banda_x1,
-            banda_y1
-        ),
-        radius=25,
-        fill=(255, 248, 201)
+        (55, 185, 760, 246),
+        radius=28,
+        fill=(255, 247, 194)
     )
 
-    dibujar_icono_lupa(
-        draw,
-        110,
-        199
-    )
+    dibujar_icono_lupa(draw, 93, 215)
 
     draw.text(
-        (145, 184),
+        (130, 199),
         "Oferta encontrada en",
-        font=fuente(24),
-        fill=(25, 25, 25)
+        font=fuente(27),
+        fill=(20, 20, 20)
     )
-
     draw.text(
-        (405, 184),
+        (427, 199),
         "Mercado Libre",
-        font=fuente(24, True),
-        fill=(25, 25, 25)
+        font=fuente(27, True),
+        fill=(20, 20, 20)
     )
 
-    # =====================================================
-    # COLUMNA IZQUIERDA DE INFORMACIÓN REAL
-    # =====================================================
-
+    # -----------------------------------------------------
+    # TRES DATOS LATERALES
+    # -----------------------------------------------------
     laterales = datos_laterales(datos)
-    ys = [310, 425, 540]
+    ys = [365, 480, 595]
 
     for indice, (tipo, texto) in enumerate(laterales):
-
         cy = ys[indice]
+        dibujar_icono_simple(draw, 88, cy, tipo)
 
-        dibujar_icono_simple(
-            draw,
-            115,
-            cy,
-            tipo
-        )
-
-        lineas_lateral = ajustar_texto(
-            draw,
-            texto,
-            fuente(19, True),
-            190
-        )
+        # Admite saltos explícitos para mantener la forma visual compacta.
+        lineas_lateral = []
+        for parte in str(texto).split("\n"):
+            lineas_lateral.extend(
+                ajustar_texto(draw, parte, fuente(20), 170)
+            )
 
         dibujar_lineas(
             draw,
             lineas_lateral[:3],
-            165,
-            cy - 24,
-            fuente(19, True),
-            (30, 30, 30),
-            2
+            140,
+            cy - 28,
+            fuente(20),
+            (22, 22, 22),
+            1
         )
 
-    # =====================================================
-    # FOTO DEL PRODUCTO GRANDE
-    # =====================================================
+    # -----------------------------------------------------
+    # FOTO GRANDE DEL PRODUCTO
+    # -----------------------------------------------------
+    producto = descargar_imagen(datos["imagen_url"])
 
-    producto = descargar_imagen(
-        datos["imagen_url"]
-    )
-
-    area_x0 = 285
-    area_y0 = 235
-    area_x1 = 990
-    area_y1 = 650
+    # Igual al modelo: ocupa casi todo el centro y derecha.
+    area_x0 = 245
+    area_y0 = 255
+    area_x1 = 1025
+    area_y1 = 750
 
     if producto:
-
         producto.thumbnail(
-            (
-                area_x1 - area_x0,
-                area_y1 - area_y0
-            ),
+            (area_x1 - area_x0, area_y1 - area_y0),
             Image.LANCZOS
         )
 
-        x_prod = (
-            area_x0
-            + (
-                (
-                    area_x1
-                    - area_x0
-                )
-                - producto.width
-            )
-            // 2
-        )
+        x_prod = area_x0 + ((area_x1 - area_x0) - producto.width) // 2
+        y_prod = area_y0 + ((area_y1 - area_y0) - producto.height) // 2
 
-        y_prod = (
-            area_y0
-            + (
-                (
-                    area_y1
-                    - area_y0
-                )
-                - producto.height
-            )
-            // 2
-        )
+        imagen.paste(producto, (x_prod, y_prod), producto)
 
-        imagen.paste(
-            producto,
-            (x_prod, y_prod),
-            producto
-        )
-
-    # =====================================================
-    # NOMBRE
-    # =====================================================
-
-    y = 675
-
-    font_titulo = fuente(
-        42,
-        True
-    )
-
-    lineas = ajustar_texto(
+    # -----------------------------------------------------
+    # NOMBRE DEL PRODUCTO: máximo 2 líneas, como la muestra.
+    # -----------------------------------------------------
+    font_titulo, lineas = titulo_que_cabe(
         draw,
         datos["nombre"],
-        font_titulo,
-        920
+        900,
+        2
     )
 
-    y = dibujar_lineas(
+    y_titulo = 780
+    dibujar_lineas(
         draw,
-        lineas[:3],
-        72,
-        y,
+        lineas,
+        105,
+        y_titulo,
         font_titulo,
-        (10, 10, 10),
-        3
+        (5, 5, 5),
+        0
     )
 
-    # =====================================================
-    # PRECIO / DESCUENTO REAL
-    # =====================================================
-
-    y += 12
-
-    if datos["precio_anterior"]:
-
-        font_anterior = fuente(25)
-
-        draw.text(
-            (72, y),
-            datos["precio_anterior"],
-            font=font_anterior,
-            fill=(110, 110, 110)
-        )
-
-        caja = draw.textbbox(
-            (72, y),
-            datos["precio_anterior"],
-            font=font_anterior
-        )
-
-        medio = (
-            caja[1]
-            + caja[3]
-        ) // 2
-
-        draw.line(
-            (
-                caja[0],
-                medio,
-                caja[2],
-                medio
-            ),
-            fill=(110, 110, 110),
-            width=3
-        )
-
-        y += 34
-
-    font_precio = fuente(
-        61,
-        True
-    )
+    # -----------------------------------------------------
+    # PRECIO AZUL GRANDE Y CENTRADO
+    # -----------------------------------------------------
+    texto_precio = datos["precio"]
+    font_precio = fuente(71, True)
+    caja_precio = draw.textbbox((0, 0), texto_precio, font=font_precio)
+    ancho_precio = caja_precio[2] - caja_precio[0]
 
     draw.text(
-        (72, y),
-        datos["precio"],
+        ((ANCHO - ancho_precio) // 2, 915),
+        texto_precio,
         font=font_precio,
-        fill=(30, 118, 239)
+        fill=(25, 115, 239)
     )
 
-    caja_precio = draw.textbbox(
-        (72, y),
-        datos["precio"],
-        font=font_precio
-    )
-
-    # Descuento solamente si Mercado Libre realmente lo mostró.
-    if datos["descuento"]:
-
-        x_desc = min(
-            caja_precio[2] + 22,
-            820
-        )
-
-        draw.rounded_rectangle(
-            (
-                x_desc,
-                y + 11,
-                x_desc + 165,
-                y + 62
-            ),
-            radius=10,
-            fill=(0, 156, 82)
-        )
-
-        draw.text(
-            (x_desc + 16, y + 21),
-            datos["descuento"],
-            font=fuente(24, True),
-            fill="white"
-        )
-
-    # =====================================================
+    # -----------------------------------------------------
     # MEDIOS DE PAGO
-    # =====================================================
+    # -----------------------------------------------------
+    dibujar_medios_pago(draw, 1025)
 
-    medios_y = 980
-
-    dibujar_medios_pago(
-        draw,
-        medios_y
-    )
-
-    # =====================================================
-    # BARRA NEGRA APROBADA
-    # =====================================================
-
-    envio_y = 1080
+    # -----------------------------------------------------
+    # BARRA NEGRA: ENVÍO PROTEGIDO
+    # -----------------------------------------------------
+    envio_y = 1128
 
     draw.rounded_rectangle(
-        (
-            90,
-            envio_y,
-            990,
-            envio_y + 68
-        ),
-        radius=15,
-        fill=(14, 14, 14)
+        (95, envio_y, 985, envio_y + 74),
+        radius=17,
+        fill=(13, 13, 13)
     )
 
-    # camión simple
-    draw.rectangle(
-        (
-            125,
-            envio_y + 23,
-            163,
-            envio_y + 46
-        ),
-        outline="white",
-        width=3
-    )
-    draw.rectangle(
-        (
-            163,
-            envio_y + 30,
-            183,
-            envio_y + 46
-        ),
-        outline="white",
-        width=3
-    )
-    draw.ellipse(
-        (
-            132,
-            envio_y + 42,
-            145,
-            envio_y + 55
-        ),
-        fill="white"
-    )
-    draw.ellipse(
-        (
-            166,
-            envio_y + 42,
-            179,
-            envio_y + 55
-        ),
-        fill="white"
-    )
+    # Camión blanco de línea.
+    draw.rectangle((142, envio_y + 24, 185, envio_y + 48), outline="white", width=4)
+    draw.rectangle((185, envio_y + 31, 207, envio_y + 48), outline="white", width=4)
+    draw.ellipse((149, envio_y + 44, 163, envio_y + 58), fill="white")
+    draw.ellipse((188, envio_y + 44, 202, envio_y + 58), fill="white")
+    draw.line((128, envio_y + 30, 141, envio_y + 30), fill="white", width=3)
+    draw.line((122, envio_y + 38, 141, envio_y + 38), fill="white", width=3)
 
     draw.text(
-        (210, envio_y + 18),
+        (235, envio_y + 20),
         "ENVÍO PROTEGIDO POR MERCADO LIBRE",
-        font=fuente(27, True),
+        font=fuente(28, True),
         fill="white"
     )
 
-    # =====================================================
-    # LINK DEL POST
-    # =====================================================
+    # Pequeños rayos amarillos a la derecha, como la muestra.
+    draw.line((938, envio_y + 20, 951, envio_y + 7), fill=(255, 226, 0), width=5)
+    draw.line((945, envio_y + 31, 962, envio_y + 28), fill=(255, 226, 0), width=5)
 
-    link_y = 1165
+    # -----------------------------------------------------
+    # BARRA DEL LINK
+    # -----------------------------------------------------
+    link_y = 1220
 
     draw.rounded_rectangle(
-        (
-            90,
-            link_y,
-            990,
-            link_y + 72
-        ),
-        radius=22,
-        fill=(255, 250, 230),
+        (65, link_y, 1015, link_y + 78),
+        radius=34,
+        fill=(255, 249, 226),
         outline=(239, 226, 175),
         width=2
     )
 
-    # icono de eslabón simple
-    draw.ellipse(
-        (
-            118,
-            link_y + 23,
-            143,
-            link_y + 48
-        ),
-        outline=(45, 50, 119),
-        width=4
-    )
-    draw.ellipse(
-        (
-            138,
-            link_y + 23,
-            163,
-            link_y + 48
-        ),
-        outline=(45, 50, 119),
-        width=4
-    )
+    # Eslabón azul.
+    azul = (45, 50, 119)
+    draw.ellipse((145, link_y + 25, 171, link_y + 51), outline=azul, width=5)
+    draw.ellipse((165, link_y + 25, 191, link_y + 51), outline=azul, width=5)
 
     draw.text(
-        (185, link_y + 22),
+        (225, link_y + 25),
         "Tocá el link del post para ver la publicación",
-        font=fuente(25, True),
-        fill=(45, 50, 119)
+        font=fuente(27, True),
+        fill=azul
     )
 
-    # ACLARACIÓN NO OFICIAL
+    # Flecha final.
+    draw.line((929, link_y + 29, 942, link_y + 39), fill=azul, width=4)
+    draw.line((942, link_y + 39, 929, link_y + 50), fill=azul, width=4)
 
-    dibujar_aviso_independiente(
-        draw,
-        1265
-    )
+    # Aviso discreto al pie, exactamente como se acordó.
+    dibujar_aviso_independiente(draw, 1310)
 
-    imagen.save(
-        salida,
-        "PNG",
-        optimize=True
-    )
+    imagen.save(salida, "PNG", optimize=True)
 
-    print(
-        "✅ Imagen creada:",
-        salida
-    )
+    print("✅ Imagen creada con plantilla aprobada:", salida)
 
     return nombre_archivo
 
