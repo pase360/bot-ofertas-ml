@@ -159,7 +159,7 @@ def nombre_desde_url(url):
 
 
 # =========================================================
-# CONTENEDOR DE PRODUCTO
+# CONTENEDOR
 # =========================================================
 
 def encontrar_contenedor(enlace):
@@ -312,7 +312,7 @@ def obtener_nombre(contenedor, enlace, url):
 
 
 # =========================================================
-# IMAGEN
+# IMAGEN DEL PRODUCTO
 # =========================================================
 
 def obtener_url_imagen(contenedor):
@@ -434,7 +434,6 @@ def obtener_precios(contenedor, texto, descuento):
     precio = ""
     precio_anterior = ""
 
-    # Primero intentamos leer por estructura HTML.
     anteriores = [
         ".andes-money-amount--previous",
         ".poly-price__original .andes-money-amount",
@@ -471,8 +470,6 @@ def obtener_precios(contenedor, texto, descuento):
             precio = valor
             break
 
-    # Si Mercado Libre cambió las clases, buscamos todos
-    # los bloques de dinero.
     if not precio:
 
         valores = []
@@ -507,7 +504,6 @@ def obtener_precios(contenedor, texto, descuento):
 
                 precio = valores[0]
 
-    # Último método: texto visible completo.
     if not precio:
 
         importes = extraer_importes_texto(
@@ -537,7 +533,7 @@ def obtener_precios(contenedor, texto, descuento):
 
 
 # =========================================================
-# DATOS DE CADA PRODUCTO
+# DATOS DEL PRODUCTO
 # =========================================================
 
 def extraer_datos_tarjeta(enlace, contenedor):
@@ -559,8 +555,6 @@ def extraer_datos_tarjeta(enlace, contenedor):
         url
     )
 
-    # DESCUENTO
-
     descuento = ""
 
     match = re.search(
@@ -576,15 +570,11 @@ def extraer_datos_tarjeta(enlace, contenedor):
             .upper()
         )
 
-    # PRECIOS
-
     precio, precio_anterior = obtener_precios(
         contenedor,
         texto,
         descuento
     )
-
-    # CUOTAS
 
     cuotas = ""
 
@@ -620,8 +610,6 @@ def extraer_datos_tarjeta(enlace, contenedor):
     if not cuotas:
         cuotas = "Consultar cuotas"
 
-    # RANKING
-
     ranking = ""
 
     match = re.search(
@@ -636,8 +624,6 @@ def extraer_datos_tarjeta(enlace, contenedor):
             match.group(1)
             + "º MÁS VENDIDO"
         )
-
-    # CALIFICACION
 
     rating = ""
 
@@ -677,8 +663,6 @@ def extraer_datos_tarjeta(enlace, contenedor):
             )
 
             break
-
-    # VENDIDOS
 
     vendidos = ""
 
@@ -829,8 +813,6 @@ def obtener_productos():
         len(productos)
     )
 
-    # Elegimos primero solamente productos
-    # que tengan foto Y precio.
     validos = [
         producto
         for producto in productos
@@ -922,7 +904,7 @@ def descargar_imagen(url):
 
 
 # =========================================================
-# TEXTO EN PLACA
+# TEXTO
 # =========================================================
 
 def ajustar_texto(
@@ -1053,7 +1035,87 @@ def colocar_logo(imagen):
 
 
 # =========================================================
-# CREAR PLACA
+# MANO APUNTANDO HACIA ABAJO
+# =========================================================
+
+def dibujar_mano_abajo(draw, x, y):
+
+    verde = (0, 105, 65)
+
+    # Palma
+    draw.rounded_rectangle(
+        (
+            x,
+            y,
+            x + 62,
+            y + 48
+        ),
+        radius=17,
+        outline=verde,
+        width=8
+    )
+
+    # Dedo
+    draw.rounded_rectangle(
+        (
+            x + 22,
+            y + 35,
+            x + 42,
+            y + 92
+        ),
+        radius=10,
+        fill=verde
+    )
+
+    # Pulgar
+    draw.line(
+        (
+            x + 4,
+            y + 28,
+            x - 18,
+            y + 48
+        ),
+        fill=verde,
+        width=8
+    )
+
+    # Rayitas debajo
+    draw.line(
+        (
+            x + 32,
+            y + 102,
+            x + 32,
+            y + 119
+        ),
+        fill=verde,
+        width=5
+    )
+
+    draw.line(
+        (
+            x + 10,
+            y + 98,
+            x,
+            y + 111
+        ),
+        fill=verde,
+        width=5
+    )
+
+    draw.line(
+        (
+            x + 54,
+            y + 98,
+            x + 65,
+            y + 111
+        ),
+        fill=verde,
+        width=5
+    )
+
+
+# =========================================================
+# CREAR PLACA FINAL
 # =========================================================
 
 def crear_imagen_oferta(datos, numero):
@@ -1075,6 +1137,8 @@ def crear_imagen_oferta(datos, numero):
 
     draw = ImageDraw.Draw(imagen)
 
+    # TARJETA
+
     draw.rounded_rectangle(
         (
             25,
@@ -1088,7 +1152,11 @@ def crear_imagen_oferta(datos, numero):
         width=2
     )
 
+    # LOGO REAL
+
     colocar_logo(imagen)
+
+    # CABECERA
 
     draw.text(
         (230, 55),
@@ -1104,7 +1172,7 @@ def crear_imagen_oferta(datos, numero):
         fill=(75, 75, 75)
     )
 
-    # FOTO
+    # FOTO DEL PRODUCTO
 
     producto = descargar_imagen(
         datos["imagen_url"]
@@ -1155,7 +1223,7 @@ def crear_imagen_oferta(datos, numero):
             producto
         )
 
-    # MÁS VENDIDO
+    # RANKING
 
     y = 585
 
@@ -1212,7 +1280,7 @@ def crear_imagen_oferta(datos, numero):
         5
     )
 
-    # RATING
+    # RATING / VENDIDOS
 
     metadata = []
 
@@ -1341,6 +1409,8 @@ def crear_imagen_oferta(datos, numero):
 
     y += 68
 
+    # INFORMACION
+
     draw.text(
         (65, y),
         "Oferta disponible en Mercado Libre",
@@ -1357,21 +1427,23 @@ def crear_imagen_oferta(datos, numero):
         fill=(60, 60, 60)
     )
 
-    # CTA VISUAL
+    # =====================================================
+    # BOTON VISUAL FINAL
+    # =====================================================
 
-    boton_y = 1135
+    boton_y = 1125
 
     draw.rounded_rectangle(
         (
             55,
             boton_y,
             1025,
-            boton_y + 130
+            boton_y + 155
         ),
         radius=30,
         fill=(220, 248, 228),
-        outline=(70, 220, 120),
-        width=3
+        outline=(50, 215, 105),
+        width=4
     )
 
     draw.text(
@@ -1379,26 +1451,25 @@ def crear_imagen_oferta(datos, numero):
             100,
             boton_y + 24
         ),
-        "Ver oferta en Mercado Libre",
-        font=fuente(37, True),
-        fill=(0, 105, 55)
+        "Compralo acá",
+        font=fuente(43, True),
+        fill=(0, 100, 55)
     )
 
     draw.text(
         (
             100,
-            boton_y + 77
+            boton_y + 82
         ),
-        "Link afiliado real debajo de esta imagen",
-        font=fuente(27),
-        fill=(65, 75, 90)
+        "Tocá el link de abajo",
+        font=fuente(30),
+        fill=(60, 70, 80)
     )
 
-    draw.text(
-        (105, 1295),
-        "Si comprás desde el enlace apoyás al canal",
-        font=fuente(24),
-        fill=(70, 75, 90)
+    dibujar_mano_abajo(
+        draw,
+        845,
+        boton_y + 27
     )
 
     imagen.save(
