@@ -2,6 +2,7 @@ import os
 import random
 import re
 import json
+from collections import deque
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
@@ -36,11 +37,12 @@ REPO = os.getenv("GITHUB_REPOSITORY", "pase360/bot-ofertas-ml")
 RAMA = os.getenv("GITHUB_REF_NAME", "main")
 VERSION = os.getenv(
     "GITHUB_RUN_ID",
-    datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"),
 )
 
 RAW_BASE = f"https://raw.githubusercontent.com/{REPO}/{RAMA}/ofertas"
 
+# Tamaño exacto de las plantillas aprobadas
 ANCHO = 1122
 ALTO = 1402
 
@@ -49,16 +51,27 @@ ALTO = 1402
 # FUENTES
 # =========================================================
 
-def fuente(tamano, negrita=False):
-    if negrita:
+def fuente(tamano, negrita=False, italica=False):
+    if negrita and italica:
         candidatos = [
+            "/usr/share/fonts/truetype/lato/Lato-HeavyItalic.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf",
+        ]
+    elif negrita:
+        candidatos = [
+            "/usr/share/fonts/truetype/lato/Lato-Heavy.ttf",
+            "/usr/share/fonts/truetype/lato/Lato-Bold.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        ]
+    elif italica:
+        candidatos = [
+            "/usr/share/fonts/truetype/lato/Lato-Italic.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
         ]
     else:
         candidatos = [
+            "/usr/share/fonts/truetype/lato/Lato-Regular.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
         ]
 
     for ruta in candidatos:
@@ -93,8 +106,8 @@ def nombre_desde_url(url):
     try:
         path = urlparse(url).path
         partes = [parte for parte in path.split("/") if parte]
-
         candidato = ""
+
         for parte in partes:
             if parte == "p":
                 continue
@@ -108,7 +121,6 @@ def nombre_desde_url(url):
 
         if candidato:
             return candidato.title()
-
     except Exception:
         pass
 
@@ -122,7 +134,7 @@ def safe_get(url, timeout=30):
 
 
 # =========================================================
-# CONTENEDOR
+# CONTENEDOR DE PRODUCTO EN MÁS VENDIDOS
 # =========================================================
 
 def encontrar_contenedor(enlace):
@@ -139,13 +151,11 @@ def encontrar_contenedor(enlace):
 
         if not texto:
             continue
-
         if len(texto) > 3000:
             continue
 
         tiene_precio = "$" in texto
         tiene_imagen = nodo.find("img") is not None
-
         tiene_datos = bool(
             re.search(
                 r"vendidos|cuotas|%\s*OFF|MÁS VENDIDO|MAS VENDIDO",
@@ -156,7 +166,6 @@ def encontrar_contenedor(enlace):
 
         if tiene_precio and tiene_imagen:
             candidatos.append((nodo, tiene_datos, len(texto)))
-
             if tiene_datos:
                 return nodo
 
@@ -218,27 +227,56 @@ def obtener_nombre(contenedor, enlace, url):
 
 
 # =========================================================
-# IMAGEN
+# IMAGEN DEL PRODUCTO DESDE MÁS VENDIDOS
 # =========================================================
 
 def obtener_url_imagen(contenedor):
+    """
+    Toma la foto del producto de la tarjeta de Más vendidos.
+    NO usa imágenes de la publicación individual, para evitar volver a
+    capturar logos de Mercado Libre / Mercado Pago por error.
+    """
+    candidatos = []
+
     for imagen in contenedor.find_all("img"):
+        alt = limpiar_texto(imagen.get("alt", "")).lower()
+
+        urls = []
         for atributo in ["data-src", "data-lazy", "src"]:
             url = imagen.get(atributo)
-            if url and url.startswith("http") and ".svg" not in url.lower():
-                return url
+            if url and url.startswith("http"):
+                urls.append(url)
 
         srcset = imagen.get("srcset")
         if srcset:
-            urls = []
             for opcion in srcset.split(","):
                 url = opcion.strip().split(" ")[0]
                 if url.startswith("http"):
                     urls.append(url)
-            if urls:
-                return urls[-1]
 
-    return ""
+        for url in urls:
+            inferior = url.lower()
+
+            if ".svg" in inferior:
+                continue
+            if any(p in inferior for p in ["logo", "icon", "sprite", "brand", "favicon"]):
+                continue
+
+            puntos = 0
+            if "mlstatic.com" in inferior:
+                puntos += 5
+            if "d_nq_np" in inferior or "d_nq_nn" in inferior:
+                puntos += 5
+            if alt:
+                puntos += 1
+
+            candidatos.append((puntos, url))
+
+    if not candidatos:
+        return ""
+
+    candidatos.sort(key=lambda x: x[0], reverse=True)
+    return candidatos[0][1]
 
 
 def descargar_imagen(url):
@@ -254,40 +292,71 @@ def descargar_imagen(url):
         return None
 
 
-def recortar_borde_blanco(img):
+def quitar_fondo_blanco_conectado(imagen):
     """
-    Quita bordes blancos o casi blancos alrededor del producto para
-    que no quede el cuadrado blanco que te molestaba.
+    Quita solo el fondo blanco/casi blanco conectado a los bordes.
+    Es más seguro que borrar todos los píxeles blancos, porque conserva
+    partes blancas internas del producto.
     """
-    if img is None:
+    if imagen is None:
         return None
 
-    img = img.convert("RGBA")
-    fondo = Image.new("RGBA", img.size, (255, 255, 255, 0))
+    img = imagen.convert("RGBA")
+    w, h = img.size
 
-    pix = img.load()
-    nueva = Image.new("RGBA", img.size)
-    nueva_pix = nueva.load()
+    # Evita procesar imágenes enormes pixel a pixel.
+    max_lado = 1100
+    if max(w, h) > max_lado:
+        escala = max_lado / max(w, h)
+        img = img.resize(
+            (max(1, int(w * escala)), max(1, int(h * escala))),
+            Image.LANCZOS,
+        )
+        w, h = img.size
 
-    for y in range(img.height):
-        for x in range(img.width):
-            r, g, b, a = pix[x, y]
+    px = img.load()
+    visitado = bytearray(w * h)
+    cola = deque()
 
-            if a == 0:
-                nueva_pix[x, y] = (255, 255, 255, 0)
-                continue
+    def es_fondo(x, y):
+        r, g, b, a = px[x, y]
+        if a == 0:
+            return True
+        # blanco o casi blanco, sin mucha diferencia entre canales
+        return r >= 246 and g >= 246 and b >= 246 and (max(r, g, b) - min(r, g, b)) <= 8
 
-            # Si es casi blanco, lo vuelve transparente
-            if r > 245 and g > 245 and b > 245:
-                nueva_pix[x, y] = (255, 255, 255, 0)
-            else:
-                nueva_pix[x, y] = (r, g, b, a)
+    def agregar(x, y):
+        idx = y * w + x
+        if not visitado[idx] and es_fondo(x, y):
+            visitado[idx] = 1
+            cola.append((x, y))
 
-    bbox = nueva.getbbox()
+    for x in range(w):
+        agregar(x, 0)
+        agregar(x, h - 1)
+    for y in range(h):
+        agregar(0, y)
+        agregar(w - 1, y)
+
+    while cola:
+        x, y = cola.popleft()
+        r, g, b, _ = px[x, y]
+        px[x, y] = (r, g, b, 0)
+
+        if x > 0:
+            agregar(x - 1, y)
+        if x + 1 < w:
+            agregar(x + 1, y)
+        if y > 0:
+            agregar(x, y - 1)
+        if y + 1 < h:
+            agregar(x, y + 1)
+
+    bbox = img.getbbox()
     if bbox:
-        nueva = nueva.crop(bbox)
+        img = img.crop(bbox)
 
-    return nueva
+    return img
 
 
 # =========================================================
@@ -364,6 +433,7 @@ def obtener_precios(contenedor, texto, descuento):
 
     if not precio:
         valores = []
+
         for elemento in contenedor.select(".andes-money-amount"):
             valor = leer_money_amount(elemento)
             if valor and valor not in valores:
@@ -394,13 +464,12 @@ def obtener_precios(contenedor, texto, descuento):
 
 
 # =========================================================
-# EXTRAER DATOS DE MÁS VENDIDOS
+# DATOS DE LA TARJETA DE MÁS VENDIDOS
 # =========================================================
 
 def extraer_datos_tarjeta(enlace, contenedor):
     url = limpiar_url(enlace.get("href"))
     texto = limpiar_texto(contenedor.get_text(" ", strip=True))
-
     nombre = obtener_nombre(contenedor, enlace, url)
 
     descuento = ""
@@ -423,10 +492,14 @@ def extraer_datos_tarjeta(enlace, contenedor):
             break
 
     if not cuotas:
-        cuotas = "Consultar cuotas"
+        cuotas = ""
 
     ranking = ""
-    match = re.search(r"(\d{1,2})\s*[º°]\s*(?:MÁS|MAS)\s+VENDIDO", texto, re.IGNORECASE)
+    match = re.search(
+        r"(\d{1,2})\s*[º°]\s*(?:MÁS|MAS)\s+VENDIDO",
+        texto,
+        re.IGNORECASE,
+    )
     if match:
         ranking = match.group(1) + "º MÁS VENDIDO"
 
@@ -450,7 +523,7 @@ def extraer_datos_tarjeta(enlace, contenedor):
     match = re.search(
         r"(\+?\s*[\d\.]+\s*(?:mil)?\s+(?:productos\s+)?vendidos)",
         texto,
-        re.IGNORECASE
+        re.IGNORECASE,
     )
     if match:
         vendidos = limpiar_texto(match.group(1))
@@ -468,14 +541,31 @@ def extraer_datos_tarjeta(enlace, contenedor):
         "rating": rating,
         "vendidos": vendidos,
         "imagen_url": imagen_url,
+        "atributos_visuales": [],
     }
 
 
 # =========================================================
-# SCRAPEO DE LA PUBLICACIÓN REAL
+# TEXTO REAL DE LA PUBLICACIÓN INDIVIDUAL
 # =========================================================
 
-def extraer_json_ld_producto(soup):
+def extraer_publicacion(url):
+    try:
+        response = safe_get(url, timeout=30)
+        soup = BeautifulSoup(response.text, "html.parser")
+        texto = limpiar_texto(soup.get_text(" ", strip=True))
+        return soup, texto
+    except Exception as e:
+        print("ERROR leyendo publicación:", url, e)
+        return None, ""
+
+
+def extraer_json_ld(soup):
+    if not soup:
+        return []
+
+    encontrados = []
+
     for script in soup.find_all("script", type="application/ld+json"):
         contenido = script.string or script.get_text(strip=True)
         if not contenido:
@@ -486,174 +576,126 @@ def extraer_json_ld_producto(soup):
         except Exception:
             continue
 
-        candidatos = data if isinstance(data, list) else [data]
+        if isinstance(data, list):
+            encontrados.extend([x for x in data if isinstance(x, dict)])
+        elif isinstance(data, dict):
+            encontrados.append(data)
 
-        for item in candidatos:
-            if not isinstance(item, dict):
+    return encontrados
+
+
+def es_texto_util_atributo(texto, nombre_producto=""):
+    texto = limpiar_texto(texto)
+    if not texto:
+        return False
+
+    inferior = texto.lower()
+
+    if len(texto) < 3 or len(texto) > 55:
+        return False
+
+    prohibidos = [
+        "mercado libre",
+        "mercado pago",
+        "comprar",
+        "oferta",
+        "envío",
+        "envio",
+        "devolución",
+        "devolucion",
+        "stock",
+        "cuotas",
+        "medios de pago",
+        "vendidos",
+        "opiniones",
+        "preguntas",
+        "publicación",
+        "publicacion",
+        "más información",
+        "mas información",
+        "ver más",
+        "ver mas",
+        "carrito",
+        "iniciar sesión",
+        "iniciar sesion",
+    ]
+
+    if any(p in inferior for p in prohibidos):
+        return False
+
+    if "$" in texto or "%" in texto:
+        return False
+
+    # Evita repetir el título completo como característica.
+    if nombre_producto and limpiar_texto(nombre_producto).lower() == inferior:
+        return False
+
+    return True
+
+
+def normalizar_atributo(texto):
+    texto = limpiar_texto(texto)
+    texto = re.sub(r"\s*:\s*", ": ", texto)
+
+    # Acorta frases muy largas sin inventar contenido.
+    palabras = texto.split()
+    if len(palabras) > 7:
+        texto = " ".join(palabras[:7])
+
+    return texto.strip(" -–—:;")
+
+
+def atributos_desde_json_ld(soup, nombre_producto):
+    resultado = []
+
+    for item in extraer_json_ld(soup):
+        adicionales = item.get("additionalProperty")
+        if not adicionales:
+            continue
+
+        if isinstance(adicionales, dict):
+            adicionales = [adicionales]
+
+        if not isinstance(adicionales, list):
+            continue
+
+        for prop in adicionales:
+            if not isinstance(prop, dict):
                 continue
-            tipo = item.get("@type", "")
-            if isinstance(tipo, list):
-                tipos = [str(t).lower() for t in tipo]
+
+            nombre = limpiar_texto(prop.get("name", ""))
+            valor = limpiar_texto(prop.get("value", ""))
+
+            if nombre and valor:
+                texto = f"{nombre}: {valor}"
             else:
-                tipos = [str(tipo).lower()]
+                texto = valor or nombre
 
-            if "product" in tipos:
-                return item
+            texto = normalizar_atributo(texto)
 
-    return {}
+            if es_texto_util_atributo(texto, nombre_producto) and texto not in resultado:
+                resultado.append(texto)
 
+            if len(resultado) >= 3:
+                return resultado
 
-def extraer_texto_publicacion(url):
-    try:
-        response = safe_get(url, timeout=30)
-        soup = BeautifulSoup(response.text, "html.parser")
-        return soup, limpiar_texto(soup.get_text(" ", strip=True))
-    except Exception as e:
-        print("ERROR publicación:", url, e)
-        return None, ""
+    return resultado
 
 
-def extraer_titulo_publicacion(soup, fallback=""):
+def atributos_desde_html(soup, nombre_producto):
+    resultado = []
+
     if not soup:
-        return fallback
+        return resultado
 
-    for selector in [
-        "h1.ui-pdp-title",
-        "h1",
-        "meta[property='og:title']",
-    ]:
-        try:
-            if selector.startswith("meta"):
-                meta = soup.select_one(selector)
-                if meta and meta.get("content"):
-                    texto = limpiar_texto(meta["content"])
-                    if texto:
-                        return texto
-            else:
-                nodo = soup.select_one(selector)
-                if nodo:
-                    texto = limpiar_texto(nodo.get_text(" ", strip=True))
-                    if texto:
-                        return texto
-        except Exception:
-            pass
-
-    return fallback
-
-
-def extraer_precio_publicacion(soup, texto_completo, fallback="Precio no disponible"):
-    if not soup:
-        return fallback, ""
-
-    # precio actual
-    precio = ""
-    precio_anterior = ""
-
-    for selector in [
-        ".ui-pdp-price__second-line .andes-money-amount",
-        ".ui-pdp-price__main-container .andes-money-amount",
-        ".andes-money-amount",
-    ]:
-        for nodo in soup.select(selector):
-            valor = leer_money_amount(nodo)
-            if valor:
-                if not precio:
-                    precio = valor
-                elif not precio_anterior and valor != precio:
-                    precio_anterior = valor
-                if precio:
-                    break
-        if precio:
-            break
-
-    if not precio:
-        importes = extraer_importes_texto(texto_completo)
-        if importes:
-            precio = importes[0]
-            if len(importes) > 1:
-                precio_anterior = importes[1]
-
-    if not precio:
-        precio = fallback
-
-    return precio, precio_anterior
-
-
-def extraer_imagen_publicacion(soup, fallback=""):
-    if not soup:
-        return fallback
-
-    for selector in [
-        "meta[property='og:image']",
-        "figure img",
-        ".ui-pdp-gallery__figure img",
-        ".ui-pdp-image img",
-        "img",
-    ]:
-        try:
-            if selector.startswith("meta"):
-                nodo = soup.select_one(selector)
-                if nodo and nodo.get("content"):
-                    url = limpiar_url(nodo["content"])
-                    if url:
-                        return url
-            else:
-                for nodo in soup.select(selector):
-                    for attr in ["src", "data-zoom", "data-src"]:
-                        url = nodo.get(attr)
-                        if url and url.startswith("http") and ".svg" not in url.lower():
-                            return url
-        except Exception:
-            pass
-
-    return fallback
-
-
-def extraer_ranking_real(texto_completo, fallback=""):
-    patrones = [
-        r"(\d{1,2}\s*[º°]\s*(?:MÁS|MAS)\s+VENDIDO)",
-        r"((?:TOP|Top)\s*\d+)",
-    ]
-
-    for patron in patrones:
-        m = re.search(patron, texto_completo, re.IGNORECASE)
-        if m:
-            return limpiar_texto(m.group(1).upper())
-
-    return fallback
-
-
-def extraer_cuotas_reales(texto_completo, fallback="Consultar cuotas"):
-    patrones = [
-        r"((?:Mismo precio(?: en)?\s+)?\d{1,2}\s+cuotas(?:\s+sin\s+inter[eé]s)?(?:\s+de\s+\$\s*[\d\.\,]+)?)",
-        r"(\d{1,2}\s+cuotas(?:\s+sin\s+inter[eé]s)?)",
-        r"(Consultar cuotas)",
-    ]
-
-    for patron in patrones:
-        m = re.search(patron, texto_completo, re.IGNORECASE)
-        if m:
-            return limpiar_texto(m.group(1))
-
-    return fallback
-
-
-def extraer_atributos_reales(soup, texto_completo, nombre_producto=""):
-    """
-    Devuelve hasta 3 textos reales de la publicación.
-    """
-    candidatos = []
-
-    # 1) atributos visibles por tabla/listas
     selectores = [
         ".ui-vpp-highlighted-specs__features li",
-        ".ui-pdp-specs__table tr",
-        ".ui-pdp-color--BLACK li",
-        ".ui-pdp-variations__picker li",
-        ".ui-pdp-description__content",
         ".ui-pdp-highlights__content li",
-        ".ui-pdp-container__row li",
+        ".ui-pdp-specs__table tr",
         ".andes-table__row",
+        "table tr",
+        "[class*='specs'] li",
+        "[class*='highlight'] li",
     ]
 
     for selector in selectores:
@@ -663,121 +705,122 @@ def extraer_atributos_reales(soup, texto_completo, nombre_producto=""):
             nodos = []
 
         for nodo in nodos:
-            texto = limpiar_texto(nodo.get_text(" ", strip=True))
+            texto = normalizar_atributo(nodo.get_text(" ", strip=True))
 
-            if not texto:
-                continue
-            if len(texto) < 4 or len(texto) > 60:
-                continue
-            if "$" in texto:
-                continue
-            if "mercado libre" in texto.lower():
-                continue
-            if texto not in candidatos:
-                candidatos.append(texto)
+            if es_texto_util_atributo(texto, nombre_producto) and texto not in resultado:
+                resultado.append(texto)
 
-    # 2) inferir desde el nombre si faltan
-    nombre = nombre_producto.lower()
+            if len(resultado) >= 3:
+                return resultado
 
-    inferidos = []
-    reglas = [
-        ("deportiv", "Diseño deportivo"),
-        ("livian", "Livianas y cómodas"),
-        ("comod", "Livianas y cómodas"),
-        ("air", "Amortiguación de aire"),
-        ("amortigu", "Amortiguación de aire"),
-        ("bluetooth", "Conectividad bluetooth"),
-        ("inalámbr", "Uso inalámbrico"),
-        ("inalambr", "Uso inalámbrico"),
-        ("smart", "Tecnología inteligente"),
-        ("full", "Stock Full"),
-        ("8 jarros", "8 jarros"),
-        ("1,4 litros", "1,4 litros"),
-        ("1.4 litros", "1,4 litros"),
-        ("verde", "Color verde"),
+    return resultado
+
+
+def atributos_desde_titulo(titulo):
+    """
+    Último respaldo: extrae expresiones que están literalmente presentes
+    en el título real del producto. No inventa características.
+    """
+    t = limpiar_texto(titulo)
+    tl = t.lower()
+    resultado = []
+
+    patrones = [
+        (r"\bA4\b", "Formato A4"),
+        (r"\bA3\b", "Formato A3"),
+        (r"\b(\d+(?:[\.,]\d+)?)\s*(?:gr|g)\b", lambda m: f"{m.group(1)} g"),
+        (r"\b(\d+(?:[\.,]\d+)?)\s*(?:kg)\b", lambda m: f"{m.group(1)} kg"),
+        (r"\b(\d+(?:[\.,]\d+)?)\s*(?:litros?|l)\b", lambda m: f"{m.group(1)} litros"),
+        (r"\b(\d+)\s*jarros?\b", lambda m: f"{m.group(1)} jarros"),
+        (r"\b(blanco|blanca|negro|negra|verde|azul|rojo|roja|gris|rosa)\b", lambda m: f"Color {m.group(1)}"),
+        (r"\bbluetooth\b", "Bluetooth"),
+        (r"\binal[aá]mbric[oa]\b", "Uso inalámbrico"),
+        (r"\bamortiguaci[oó]n(?:\s+de\s+aire)?\b", lambda m: m.group(0).capitalize()),
+        (r"\blivian[oa]s?\b", lambda m: m.group(0).capitalize()),
+        (r"\bdeportiv[oa]s?\b", lambda m: m.group(0).capitalize()),
+        (r"\b(\d+)\s*ml\b", lambda m: f"{m.group(1)} ml"),
+        (r"\b(\d+)\s*cm\b", lambda m: f"{m.group(1)} cm"),
+        (r"\b(\d+)\s*unidades?\b", lambda m: f"{m.group(1)} unidades"),
     ]
 
-    for clave, valor in reglas:
-        if clave in nombre and valor not in inferidos:
-            inferidos.append(valor)
+    for patron, salida in patrones:
+        for m in re.finditer(patron, t, re.IGNORECASE):
+            if callable(salida):
+                texto = salida(m)
+            else:
+                texto = salida
 
-    # limpiar y elegir
-    resultado = []
-    for texto in candidatos + inferidos:
-        texto = limpiar_texto(texto)
-        if not texto:
+            texto = limpiar_texto(texto)
+            if texto and texto.lower() not in [x.lower() for x in resultado]:
+                resultado.append(texto)
+
+            if len(resultado) >= 3:
+                return resultado
+
+    # Si todavía falta, toma fragmentos reales del título sin inventarlos.
+    palabras = t.split()
+    stop = {
+        "para", "con", "sin", "de", "del", "la", "el", "los", "las",
+        "y", "en", "un", "una", "por", "a", "modelo", "marca",
+    }
+
+    for palabra in palabras:
+        limpia = palabra.strip(",.;:()[]-/")
+        if len(limpia) < 4:
             continue
-
-        # partir si viene con "clave valor"
-        texto = texto.replace("  ", " ")
-        if len(texto) > 26:
-            # intenta acortarlo
-            partes = texto.split()
-            texto = " ".join(partes[:4])
-
-        if texto not in resultado:
-            resultado.append(texto)
-
+        if limpia.lower() in stop:
+            continue
+        if limpia.lower() in tl and limpia.lower() not in [x.lower() for x in resultado]:
+            resultado.append(limpia.capitalize())
         if len(resultado) >= 3:
             break
 
     return resultado[:3]
 
 
-def enriquecer_con_publicacion_real(datos):
-    url = datos["url_original"]
-    soup, texto_completo = extraer_texto_publicacion(url)
+def obtener_atributos_reales_publicacion(soup, titulo):
+    resultado = []
 
-    if not soup:
-        datos["atributos_visuales"] = []
-        return datos
+    for fuente_resultados in [
+        atributos_desde_json_ld(soup, titulo),
+        atributos_desde_html(soup, titulo),
+        atributos_desde_titulo(titulo),
+    ]:
+        for texto in fuente_resultados:
+            texto = normalizar_atributo(texto)
+            if not texto:
+                continue
+            if texto.lower() not in [x.lower() for x in resultado]:
+                resultado.append(texto)
+            if len(resultado) >= 3:
+                return resultado
 
-    json_ld = extraer_json_ld_producto(soup)
+    return resultado[:3]
 
-    titulo_real = extraer_titulo_publicacion(soup, fallback=datos["nombre"])
-    if titulo_real:
-        datos["nombre"] = titulo_real
 
-    precio_real, precio_anterior_real = extraer_precio_publicacion(
-        soup,
-        texto_completo,
-        fallback=datos["precio"],
-    )
-    if precio_real:
-        datos["precio"] = precio_real
-    if precio_anterior_real:
-        datos["precio_anterior"] = precio_anterior_real
+def enriquecer_solo_textos_reales(datos):
+    """
+    IMPORTANTE:
+    - Consulta la publicación individual SOLO para obtener textos reales.
+    - NO cambia imagen_url.
+    - NO cambia el producto por imágenes de la publicación.
+    - Conserva la foto correcta obtenida en Más vendidos.
+    """
+    imagen_original = datos.get("imagen_url", "")
 
-    imagen_real = extraer_imagen_publicacion(soup, fallback=datos["imagen_url"])
-    if imagen_real:
-        datos["imagen_url"] = imagen_real
+    soup, _ = extraer_publicacion(datos["url_original"])
 
-    ranking_real = extraer_ranking_real(texto_completo, fallback=datos.get("ranking", ""))
-    if ranking_real:
-        datos["ranking"] = ranking_real
+    if soup:
+        datos["atributos_visuales"] = obtener_atributos_reales_publicacion(
+            soup,
+            datos["nombre"],
+        )
+    else:
+        datos["atributos_visuales"] = atributos_desde_titulo(datos["nombre"])
 
-    cuotas_reales = extraer_cuotas_reales(texto_completo, fallback=datos.get("cuotas", "Consultar cuotas"))
-    if cuotas_reales:
-        datos["cuotas"] = cuotas_reales
+    # Garantía: nunca reemplazar la foto del producto por un logo de la página.
+    datos["imagen_url"] = imagen_original
 
-    atributos = extraer_atributos_reales(
-        soup,
-        texto_completo,
-        nombre_producto=datos["nombre"],
-    )
-
-    # Si JSON-LD trae nombre distinto o imagen, usa lo mejor
-    if isinstance(json_ld, dict):
-        if not datos["nombre"] and json_ld.get("name"):
-            datos["nombre"] = limpiar_texto(json_ld.get("name"))
-        if not datos["imagen_url"] and json_ld.get("image"):
-            imagen = json_ld.get("image")
-            if isinstance(imagen, list) and imagen:
-                datos["imagen_url"] = imagen[0]
-            elif isinstance(imagen, str):
-                datos["imagen_url"] = imagen
-
-    datos["atributos_visuales"] = atributos
     return datos
 
 
@@ -789,11 +832,9 @@ def obtener_productos():
     print("--- DESCARGANDO MÁS VENDIDOS ---")
 
     response = safe_get(URL_MAS_VENDIDOS, timeout=30)
-
     print("HTTP Más vendidos:", response.status_code)
 
     soup = BeautifulSoup(response.text, "html.parser")
-
     encontrados = {}
 
     for enlace in soup.find_all("a", href=True):
@@ -801,7 +842,6 @@ def obtener_productos():
 
         if not es_producto(url):
             continue
-
         if "mas-vendidos" in url:
             continue
 
@@ -817,16 +857,15 @@ def obtener_productos():
         if datos["precio"] != "Precio no disponible":
             puntos += 6
         if datos["imagen_url"]:
-            puntos += 4
+            puntos += 5
         if datos["descuento"]:
             puntos += 1
-        if datos["cuotas"] != "Consultar cuotas":
+        if datos["cuotas"]:
             puntos += 1
         if datos["ranking"]:
             puntos += 1
 
         anterior = encontrados.get(url)
-
         if anterior is None or puntos > anterior["_puntos"]:
             datos["_puntos"] = puntos
             encontrados[url] = datos
@@ -848,10 +887,7 @@ def obtener_productos():
 
     print("Productos con precio válido:", len(validos))
 
-    if len(validos) >= CANTIDAD_PRODUCTOS:
-        candidatos = validos[:40]
-    else:
-        candidatos = productos[:40]
+    candidatos = validos[:40] if len(validos) >= CANTIDAD_PRODUCTOS else productos[:40]
 
     if len(candidatos) >= CANTIDAD_PRODUCTOS:
         seleccionados = random.sample(candidatos, CANTIDAD_PRODUCTOS)
@@ -859,24 +895,24 @@ def obtener_productos():
         seleccionados = candidatos
 
     enriquecidos = []
+
     for numero, producto in enumerate(seleccionados, start=1):
-        print(f"Enriqueciendo producto {numero}/{len(seleccionados)}...")
-        producto = enriquecer_con_publicacion_real(producto)
+        print(f"Leyendo textos reales {numero}/{len(seleccionados)}...")
+        producto = enriquecer_solo_textos_reales(producto)
         enriquecidos.append(producto)
 
-    for numero, producto in enumerate(enriquecidos, start=1):
         print(
             f"{numero}. {producto['nombre']} | "
             f"{producto['precio']} | "
-            f"{producto.get('cuotas', '')} | "
-            f"{producto.get('ranking', '')}"
+            f"foto={producto['imagen_url'][:70]} | "
+            f"atributos={producto.get('atributos_visuales', [])}"
         )
 
     return enriquecidos
 
 
 # =========================================================
-# TEXTO
+# TEXTO PARA LA IMAGEN
 # =========================================================
 
 def ajustar_texto(draw, texto, font, ancho_maximo):
@@ -924,13 +960,14 @@ def lineas_limitadas(draw, texto, font, ancho_maximo, max_lineas):
 
 
 def fuente_titulo(draw, texto):
-    for tamano in range(49, 31, -1):
+    # Tamaño y peso ajustados al diseño aprobado.
+    for tamano in range(43, 30, -1):
         f = fuente(tamano, True)
         lineas = ajustar_texto(draw, texto, f, 920)
         if len(lineas) <= 2:
             return f, lineas
 
-    f = fuente(31, True)
+    f = fuente(30, True)
     return f, lineas_limitadas(draw, texto, f, 920, 2)
 
 
@@ -940,7 +977,9 @@ def fuente_titulo(draw, texto):
 
 def cargar_plantilla(path):
     if not path.exists():
-        raise FileNotFoundError(f"Falta {path.name}. Subila a la raíz del repositorio.")
+        raise FileNotFoundError(
+            f"Falta {path.name}. Subila a la raíz del repositorio."
+        )
 
     imagen = Image.open(path).convert("RGBA")
 
@@ -950,102 +989,72 @@ def cargar_plantilla(path):
     return imagen
 
 
-def bloques_laterales_reales(datos):
+def dibujar_textos_laterales(draw, datos):
     """
-    Acá sale de la publicación real.
-    Prioridad:
-    1) ranking real
-    2) cuotas reales
-    3) atributos reales de la publicación
+    Usa únicamente los tres textos obtenidos de la publicación real.
+    Los íconos amarillos ya están incorporados en la plantilla.
     """
-    bloques = []
+    textos = list(datos.get("atributos_visuales", []))[:3]
 
-    if datos.get("ranking"):
-        bloques.append(datos["ranking"])
-    elif datos.get("vendidos"):
-        bloques.append(datos["vendidos"])
+    # Si la web no expuso 3 especificaciones, completa solo con texto literal
+    # del título de la publicación, nunca con frases inventadas.
+    if len(textos) < 3:
+        for texto in atributos_desde_titulo(datos.get("nombre", "")):
+            if texto.lower() not in [x.lower() for x in textos]:
+                textos.append(texto)
+            if len(textos) >= 3:
+                break
 
-    if datos.get("cuotas"):
-        bloques.append(datos["cuotas"])
+    while len(textos) < 3:
+        textos.append("")
 
-    for texto in datos.get("atributos_visuales", []):
-        if texto and texto not in bloques:
-            bloques.append(texto)
-
-    # fallback si todavía faltan
-    fallbacks = [
-        "Producto destacado",
-        "Consultar cuotas",
-        "Oferta seleccionada",
-    ]
-    for f in fallbacks:
-        if len(bloques) >= 3:
-            break
-        if f not in bloques:
-            bloques.append(f)
-
-    return bloques[:3]
-
-
-def dibujar_datos_laterales(draw, datos):
-    """
-    La plantilla ya tiene los círculos e íconos del diseño aprobado.
-    Sólo escribimos al lado con los datos reales.
-    """
-    textos = bloques_laterales_reales(datos)
     centros_y = [390, 510, 630]
-    font_item = fuente(20, False)
+    font_item = fuente(19, False)
 
     for cy, texto in zip(centros_y, textos):
-        lineas = []
+        if not texto:
+            continue
 
-        # si el texto es muy largo, lo partimos
-        for bloque in str(texto).split("\n"):
-            lineas.extend(ajustar_texto(draw, bloque, font_item, 180))
-
-        lineas = lineas[:3]
-        if not lineas:
-            lineas = [""]
-
-        alto_total = len(lineas) * 24
-        y = cy - alto_total // 2
+        lineas = ajustar_texto(draw, texto, font_item, 170)[:3]
+        alto_linea = 22
+        y = cy - (len(lineas) * alto_linea) // 2
 
         for linea in lineas:
-            draw.text((156, y), linea, font=font_item, fill=(25, 25, 25))
-            y += 24
+            draw.text((157, y), linea, font=font_item, fill=(18, 18, 18))
+            y += alto_linea
 
 
 def pegar_producto(imagen, producto):
     """
-    Más grande y sin fondo blanco, para que se parezca más a la aprobada.
+    Inserta el producto grande, centrado y sin el rectángulo blanco exterior.
     """
     if producto is None:
         return
 
-    producto = recortar_borde_blanco(producto)
-
-    if producto is None:
+    producto = quitar_fondo_blanco_conectado(producto)
+    if producto is None or producto.width < 2 or producto.height < 2:
         return
 
-    area_x0 = 250
-    area_y0 = 250
-    area_x1 = 1000
+    # Zona central del diseño aprobado.
+    area_x0 = 245
+    area_y0 = 275
+    area_x1 = 1010
     area_y1 = 770
 
     max_w = area_x1 - area_x0
     max_h = area_y1 - area_y0
 
-    # agrandamos bastante más que antes
-    ratio = min(max_w / producto.width, max_h / producto.height)
-    ratio *= 1.08
+    escala = min(max_w / producto.width, max_h / producto.height)
 
-    nuevo_w = int(producto.width * ratio)
-    nuevo_h = int(producto.height * ratio)
+    # Le damos presencia similar a la zapatilla aprobada.
+    # Nunca achica innecesariamente una foto pequeña.
+    nuevo_w = max(1, int(producto.width * escala))
+    nuevo_h = max(1, int(producto.height * escala))
 
     producto = producto.resize((nuevo_w, nuevo_h), Image.LANCZOS)
 
-    x = area_x0 + ((area_x1 - area_x0) - producto.width) // 2
-    y = area_y0 + ((area_y1 - area_y0) - producto.height) // 2
+    x = area_x0 + (max_w - producto.width) // 2
+    y = area_y0 + (max_h - producto.height) // 2
 
     imagen.paste(producto, (x, y), producto)
 
@@ -1053,43 +1062,68 @@ def pegar_producto(imagen, producto):
 def dibujar_precio(draw, precio):
     texto = limpiar_texto(precio)
 
-    for tamano in range(78, 54, -1):
+    for tamano in range(75, 52, -1):
         f = fuente(tamano, True)
         caja = draw.textbbox((0, 0), texto, font=f)
         ancho = caja[2] - caja[0]
 
         if ancho <= 760:
             x = (ANCHO - ancho) // 2
-            draw.text((x, 968), texto, font=f, fill=(38, 110, 245))
+            draw.text(
+                (x, 968),
+                texto,
+                font=f,
+                fill=(18, 105, 255),
+            )
             return
+
+
+def dibujar_slogan_mercado_libre(draw):
+    """Agrega el slogan visible en el modelo aprobado."""
+    azul = (36, 49, 126)
+    amarillo = (255, 225, 0)
+
+    f = fuente(20, True, True)
+    draw.text((838, 269), "Lo mejor", font=f, fill=azul)
+    draw.text((855, 292), "está acá", font=f, fill=azul)
+    draw.line((916, 319, 972, 305), fill=amarillo, width=7)
 
 
 def crear_imagen_oferta(datos, numero):
     nombre_archivo = f"oferta_final_{numero:02d}_{VERSION}.png"
     salida = CARPETA_OFERTAS / nombre_archivo
 
+    # La plantilla fija conserva exactamente colores, cabecera, tarjetas,
+    # barra negra, barra inferior, logos y adornos aprobados.
     imagen = cargar_plantilla(PLANTILLA_OFERTA_PATH)
     draw = ImageDraw.Draw(imagen)
 
-    # textos reales de la publicación
-    dibujar_datos_laterales(draw, datos)
+    dibujar_slogan_mercado_libre(draw)
 
+    # 1) Textos laterales: de la publicación real.
+    dibujar_textos_laterales(draw, datos)
+
+    # 2) Foto: SIEMPRE la que viene de Más vendidos.
     producto = descargar_imagen(datos["imagen_url"])
     pegar_producto(imagen, producto)
 
+    # 3) Nombre real del producto.
     font_titulo, lineas = fuente_titulo(draw, datos["nombre"])
+
     y = 825
-
     for linea in lineas[:2]:
-        draw.text((100, y), linea, font=font_titulo, fill=(8, 8, 8))
-        caja = draw.textbbox((100, y), linea, font=font_titulo)
-        y = caja[3] + 1
+        caja = draw.textbbox((0, 0), linea, font=font_titulo)
+        ancho = caja[2] - caja[0]
+        x = (ANCHO - ancho) // 2
+        draw.text((x, y), linea, font=font_titulo, fill=(6, 6, 6))
+        y += 45
 
+    # 4) Precio.
     dibujar_precio(draw, datos["precio"])
 
     imagen.convert("RGB").save(salida, "PNG", optimize=True)
 
-    print("✅ Imagen creada con plantilla aprobada:", salida)
+    print("✅ Imagen creada con producto correcto:", salida)
     return nombre_archivo
 
 
@@ -1109,7 +1143,7 @@ def crear_imagen_promo_canal():
 
 
 # =========================================================
-# GUARDAR ARCHIVOS
+# GUARDAR ARCHIVOS PARA AUTOMATE
 # =========================================================
 
 def limpiar_ofertas():
@@ -1147,7 +1181,7 @@ def guardar_tanda(productos):
     print("✅ datos_tanda.txt generado")
     print("✅ imagenes_tanda.txt generado")
 
-    # se genera aparte, sin tocar el flujo actual de Automate
+    # Queda aparte para no cambiar el circuito actual de Automate.
     crear_imagen_promo_canal()
 
 
@@ -1162,9 +1196,7 @@ def main():
         raise RuntimeError("No se pudieron obtener productos")
 
     print("Productos seleccionados:", len(productos))
-
     guardar_tanda(productos)
-
     print("✅ PROCESO COMPLETO FINALIZADO")
 
 
