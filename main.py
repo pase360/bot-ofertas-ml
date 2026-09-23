@@ -1039,10 +1039,18 @@ def colocar_logo(imagen):
 # ELEMENTOS VISUALES MERCADO LIBRE / CANAL
 # =========================================================
 
-def colocar_logo_mercadolibre(imagen, x, y, ancho_max=240, alto_max=95):
+def texto_centrado(draw, texto, y, font, color, x0=0, x1=ANCHO):
+    caja = draw.textbbox((0, 0), texto, font=font)
+    ancho = caja[2] - caja[0]
+    x = x0 + ((x1 - x0) - ancho) // 2
+    draw.text((x, y), texto, font=font, fill=color)
+
+
+def colocar_logo_mercadolibre(imagen, x, y, ancho_max=150, alto_max=95):
     """
     Usa logo_mercadolibre.png si existe.
-    Si no existe, dibuja una referencia visual simple para no romper el flujo.
+    El archivo puede ser solamente el isotipo del apretón de manos.
+    Debajo se dibuja el nombre y el slogan para mantener el aspecto aprobado.
     """
 
     draw = ImageDraw.Draw(imagen)
@@ -1054,164 +1062,326 @@ def colocar_logo_mercadolibre(imagen, x, y, ancho_max=240, alto_max=95):
                 (ancho_max, alto_max),
                 Image.LANCZOS
             )
+
+            pos_x = x + (ancho_max - logo.width) // 2
+
             imagen.paste(
                 logo,
-                (x, y),
+                (pos_x, y),
                 logo
             )
-            return
+
         except Exception as e:
             print("ERROR logo Mercado Libre:", e)
 
-    # Fallback: mantiene el diseño aunque falte el PNG real.
-    draw.rounded_rectangle(
-        (
-            x,
-            y,
-            x + ancho_max,
-            y + 72
-        ),
-        radius=20,
-        fill=(255, 230, 0)
+    else:
+        # Fallback visual si todavía no se subió el PNG.
+        draw.ellipse(
+            (
+                x + 12,
+                y,
+                x + ancho_max - 12,
+                y + alto_max
+            ),
+            fill=(255, 230, 0),
+            outline=(45, 50, 119),
+            width=5
+        )
+
+        draw.text(
+            (x + 41, y + 29),
+            "ML",
+            font=fuente(29, True),
+            fill=(45, 50, 119)
+        )
+
+    texto_centrado(
+        draw,
+        "mercado",
+        y + alto_max + 2,
+        fuente(24, True),
+        (45, 50, 119),
+        x,
+        x + ancho_max
     )
 
-    draw.text(
-        (x + 17, y + 19),
-        "mercado libre",
-        font=fuente(29, True),
-        fill=(45, 50, 119)
+    texto_centrado(
+        draw,
+        "libre",
+        y + alto_max + 28,
+        fuente(24, True),
+        (45, 50, 119),
+        x,
+        x + ancho_max
     )
+
+    texto_centrado(
+        draw,
+        "Lo mejor",
+        y + alto_max + 59,
+        fuente(15, True),
+        (45, 50, 119),
+        x,
+        x + ancho_max
+    )
+
+    texto_centrado(
+        draw,
+        "está acá",
+        y + alto_max + 76,
+        fuente(15, True),
+        (45, 50, 119),
+        x,
+        x + ancho_max
+    )
+
+
+def dibujar_icono_lupa(draw, cx, cy):
+    draw.ellipse(
+        (cx - 18, cy - 18, cx + 11, cy + 11),
+        outline=(15, 15, 15),
+        width=4
+    )
+    draw.line(
+        (cx + 7, cy + 8, cx + 24, cy + 25),
+        fill=(15, 15, 15),
+        width=5
+    )
+
+
+def dibujar_icono_simple(draw, cx, cy, tipo):
+    fondo = (255, 247, 194)
+
+    draw.ellipse(
+        (cx - 32, cy - 32, cx + 32, cy + 32),
+        fill=fondo
+    )
+
+    color = (20, 20, 20)
+
+    if tipo == "ranking":
+        # podio simple
+        draw.rectangle(
+            (cx - 21, cy + 5, cx - 8, cy + 20),
+            outline=color,
+            width=3
+        )
+        draw.rectangle(
+            (cx - 4, cy - 7, cx + 9, cy + 20),
+            outline=color,
+            width=3
+        )
+        draw.rectangle(
+            (cx + 13, cy + 1, cx + 26, cy + 20),
+            outline=color,
+            width=3
+        )
+
+    elif tipo == "cuotas":
+        # tres tarjetas superpuestas
+        for despl in (0, 7, 14):
+            draw.rounded_rectangle(
+                (
+                    cx - 22 + despl,
+                    cy - 16 + despl // 2,
+                    cx + 11 + despl,
+                    cy + 8 + despl // 2
+                ),
+                radius=4,
+                outline=color,
+                width=3
+            )
+
+    else:
+        # estrella / destacado
+        puntos = [
+            (cx, cy - 23),
+            (cx + 7, cy - 7),
+            (cx + 24, cy - 5),
+            (cx + 11, cy + 7),
+            (cx + 15, cy + 24),
+            (cx, cy + 14),
+            (cx - 15, cy + 24),
+            (cx - 11, cy + 7),
+            (cx - 24, cy - 5),
+            (cx - 7, cy - 7),
+        ]
+        draw.polygon(
+            puntos,
+            outline=color
+        )
+
+
+def datos_laterales(datos):
+    """
+    Usa solamente información real ya extraída de Mercado Libre.
+    No inventa características técnicas del producto.
+    """
+
+    resultado = []
+
+    if datos.get("ranking"):
+        resultado.append(
+            ("ranking", datos["ranking"])
+        )
+    else:
+        resultado.append(
+            ("ranking", "Oferta seleccionada")
+        )
+
+    if (
+        datos.get("cuotas")
+        and datos["cuotas"] != "Consultar cuotas"
+    ):
+        resultado.append(
+            ("cuotas", datos["cuotas"])
+        )
+    else:
+        resultado.append(
+            ("cuotas", "Consultar cuotas")
+        )
+
+    if datos.get("vendidos"):
+        resultado.append(
+            ("destacado", datos["vendidos"])
+        )
+    elif datos.get("rating"):
+        resultado.append(
+            ("destacado", "★ " + datos["rating"])
+        )
+    else:
+        resultado.append(
+            ("destacado", "Producto destacado")
+        )
+
+    return resultado[:3]
 
 
 def dibujar_medios_pago(draw, y):
     """
-    Bloque visual de medios de pago.
-    Es genérico: no afirma cuotas específicas del producto.
+    Bloque visual compacto igual al estilo aprobado.
+    No afirma cuotas ni beneficios específicos.
     """
 
     draw.rounded_rectangle(
         (
-            55,
+            70,
             y,
-            1025,
-            y + 105
+            1010,
+            y + 82
         ),
-        radius=24,
-        fill=(246, 246, 246),
-        outline=(228, 228, 228),
+        radius=18,
+        fill=(247, 247, 247),
+        outline=(230, 230, 230),
         width=2
     )
 
     draw.text(
-        (78, y + 34),
+        (92, y + 25),
         "Medios de pago",
-        font=fuente(29, True),
-        fill=(20, 20, 20)
+        font=fuente(25, True),
+        fill=(18, 18, 18)
     )
 
     x = 345
 
-    # Mastercard visual
+    # Mastercard
     draw.ellipse(
-        (x, y + 27, x + 49, y + 76),
+        (x, y + 22, x + 39, y + 61),
         fill=(235, 0, 27)
     )
     draw.ellipse(
-        (x + 34, y + 27, x + 83, y + 76),
+        (x + 27, y + 22, x + 66, y + 61),
         fill=(255, 153, 0)
     )
-    x += 105
+    x += 84
 
     # VISA
     draw.rounded_rectangle(
-        (x, y + 22, x + 118, y + 82),
-        radius=12,
-        fill=(255, 255, 255),
-        outline=(220, 220, 220),
+        (x, y + 18, x + 94, y + 64),
+        radius=10,
+        fill="white",
+        outline=(223, 223, 223),
         width=2
     )
     draw.text(
-        (x + 18, y + 35),
+        (x + 15, y + 28),
         "VISA",
-        font=fuente(26, True),
+        font=fuente(22, True),
         fill=(28, 76, 151)
     )
-    x += 132
+    x += 106
 
     # AMEX
     draw.rounded_rectangle(
-        (x, y + 22, x + 100, y + 82),
-        radius=12,
+        (x, y + 18, x + 78, y + 64),
+        radius=10,
         fill=(31, 144, 203)
     )
     draw.text(
-        (x + 12, y + 37),
+        (x + 9, y + 31),
         "AMEX",
-        font=fuente(20, True),
+        font=fuente(16, True),
         fill="white"
     )
-    x += 114
+    x += 90
 
     # Mercado Pago
     draw.rounded_rectangle(
-        (x, y + 22, x + 165, y + 82),
-        radius=12,
-        fill=(255, 255, 255),
-        outline=(220, 220, 220),
+        (x, y + 18, x + 148, y + 64),
+        radius=10,
+        fill="white",
+        outline=(223, 223, 223),
         width=2
     )
     draw.text(
-        (x + 15, y + 36),
-        "Mercado Pago",
-        font=fuente(19, True),
+        (x + 10, y + 31),
+        "mercado pago",
+        font=fuente(16, True),
         fill=(40, 112, 190)
     )
-    x += 179
+    x += 160
 
     # Naranja X
     draw.rounded_rectangle(
-        (x, y + 22, x + 100, y + 82),
-        radius=12,
-        fill=(255, 255, 255),
-        outline=(220, 220, 220),
+        (x, y + 18, x + 105, y + 64),
+        radius=10,
+        fill="white",
+        outline=(223, 223, 223),
         width=2
     )
     draw.text(
-        (x + 7, y + 36),
-        "Naranja X",
-        font=fuente(19, True),
+        (x + 8, y + 31),
+        "NaranjaX",
+        font=fuente(15, True),
         fill=(230, 84, 25)
     )
+    x += 117
 
-    # +3
     draw.rounded_rectangle(
-        (980, y + 22, 1018, y + 82),
-        radius=12,
-        fill=(255, 255, 255),
-        outline=(220, 220, 220),
+        (x, y + 18, x + 55, y + 64),
+        radius=10,
+        fill="white",
+        outline=(223, 223, 223),
         width=2
     )
     draw.text(
-        (986, y + 36),
+        (x + 11, y + 29),
         "+3",
-        font=fuente(21, True),
+        font=fuente(19, True),
         fill=(30, 30, 30)
     )
 
 
 def dibujar_aviso_independiente(draw, y):
-    draw.text(
-        (65, y),
-        "Canal independiente. No oficial. No somos Mercado Libre.",
-        font=fuente(22, True),
-        fill=(70, 70, 70)
-    )
-
-    draw.text(
-        (65, y + 32),
-        "Precios, stock, financiación y condiciones pueden variar en la publicación.",
-        font=fuente(20),
-        fill=(95, 95, 95)
+    texto_centrado(
+        draw,
+        "Canal independiente. No oficial.",
+        y,
+        fuente(17, True),
+        (95, 95, 95),
+        40,
+        1040
     )
 
 
@@ -1238,79 +1408,134 @@ def crear_imagen_oferta(datos, numero):
 
     draw = ImageDraw.Draw(imagen)
 
-    # TARJETA
+    # TARJETA BLANCA PRINCIPAL
 
     draw.rounded_rectangle(
         (
-            25,
-            20,
-            1055,
-            1328
+            28,
+            22,
+            1052,
+            1325
         ),
-        radius=40,
+        radius=38,
         fill=(255, 255, 255),
-        outline=(225, 225, 225),
+        outline=(231, 231, 231),
         width=2
     )
 
-    # CABECERA DEL CANAL
+    # =====================================================
+    # CABECERA: IGUAL AL DISEÑO APROBADO
+    # =====================================================
 
     colocar_logo(imagen)
 
     draw.text(
-        (230, 48),
+        (225, 53),
         "Cazadores de Ofertas",
-        font=fuente(45, True),
+        font=fuente(43, True),
         fill=(10, 10, 10)
     )
 
     draw.text(
-        (232, 105),
-        "Las mejores ofertas de Mercado Libre, todos los días",
-        font=fuente(24),
-        fill=(75, 75, 75)
+        (227, 105),
+        "Las mejores ofertas, todos los días",
+        font=fuente(23),
+        fill=(72, 72, 72)
     )
-
-    # LOGO / REFERENCIA A MERCADO LIBRE
 
     colocar_logo_mercadolibre(
         imagen,
-        805,
-        38,
-        205,
-        90
+        840,
+        35,
+        135,
+        72
     )
 
-    # BANDA DE IDENTIFICACIÓN
+    # BANDA AMARILLA "OFERTA ENCONTRADA..."
+
+    banda_x0 = 78
+    banda_y0 = 170
+    banda_x1 = 695
+    banda_y1 = 228
 
     draw.rounded_rectangle(
         (
-            60,
-            165,
-            1020,
-            225
+            banda_x0,
+            banda_y0,
+            banda_x1,
+            banda_y1
         ),
-        radius=22,
-        fill=(255, 247, 194)
+        radius=25,
+        fill=(255, 248, 201)
+    )
+
+    dibujar_icono_lupa(
+        draw,
+        110,
+        199
     )
 
     draw.text(
-        (90, 181),
-        "Oferta encontrada en Mercado Libre",
-        font=fuente(30, True),
-        fill=(20, 20, 20)
+        (145, 184),
+        "Oferta encontrada en",
+        font=fuente(24),
+        fill=(25, 25, 25)
     )
 
-    # FOTO DEL PRODUCTO
+    draw.text(
+        (405, 184),
+        "Mercado Libre",
+        font=fuente(24, True),
+        fill=(25, 25, 25)
+    )
+
+    # =====================================================
+    # COLUMNA IZQUIERDA DE INFORMACIÓN REAL
+    # =====================================================
+
+    laterales = datos_laterales(datos)
+    ys = [310, 425, 540]
+
+    for indice, (tipo, texto) in enumerate(laterales):
+
+        cy = ys[indice]
+
+        dibujar_icono_simple(
+            draw,
+            115,
+            cy,
+            tipo
+        )
+
+        lineas_lateral = ajustar_texto(
+            draw,
+            texto,
+            fuente(19, True),
+            190
+        )
+
+        dibujar_lineas(
+            draw,
+            lineas_lateral[:3],
+            165,
+            cy - 24,
+            fuente(19, True),
+            (30, 30, 30),
+            2
+        )
+
+    # =====================================================
+    # FOTO DEL PRODUCTO GRANDE
+    # =====================================================
 
     producto = descargar_imagen(
         datos["imagen_url"]
     )
 
-    area_x0 = 65
-    area_y0 = 250
-    area_x1 = 1015
-    area_y1 = 585
+    area_x0 = 285
+    area_y0 = 235
+    area_x1 = 990
+    area_y1 = 650
 
     if producto:
 
@@ -1322,7 +1547,7 @@ def crear_imagen_oferta(datos, numero):
             Image.LANCZOS
         )
 
-        x = (
+        x_prod = (
             area_x0
             + (
                 (
@@ -1348,97 +1573,18 @@ def crear_imagen_oferta(datos, numero):
 
         imagen.paste(
             producto,
-            (x, y_prod),
+            (x_prod, y_prod),
             producto
         )
 
-    # BADGES REALES: ranking y/o descuento solo si existen en la tarjeta de ML
-
-    badge_y = 590
-    badge_x = 65
-
-    if datos["ranking"]:
-
-        texto_ranking = datos["ranking"][:24]
-
-        caja = draw.textbbox(
-            (0, 0),
-            texto_ranking,
-            font=fuente(27, True)
-        )
-
-        ancho_badge = min(
-            410,
-            (caja[2] - caja[0]) + 44
-        )
-
-        draw.rounded_rectangle(
-            (
-                badge_x,
-                badge_y,
-                badge_x + ancho_badge,
-                badge_y + 58
-            ),
-            radius=13,
-            fill=(255, 92, 20)
-        )
-
-        draw.text(
-            (
-                badge_x + 20,
-                badge_y + 13
-            ),
-            texto_ranking,
-            font=fuente(27, True),
-            fill="white"
-        )
-
-        badge_x += ancho_badge + 18
-
-    # El descuento solo se muestra si fue leído de Mercado Libre.
-    if datos["descuento"]:
-
-        texto_desc = datos["descuento"][:18]
-
-        caja = draw.textbbox(
-            (0, 0),
-            texto_desc,
-            font=fuente(27, True)
-        )
-
-        ancho_desc = (
-            caja[2]
-            - caja[0]
-            + 40
-        )
-
-        draw.rounded_rectangle(
-            (
-                badge_x,
-                badge_y,
-                badge_x + ancho_desc,
-                badge_y + 58
-            ),
-            radius=13,
-            fill=(0, 153, 82)
-        )
-
-        draw.text(
-            (
-                badge_x + 18,
-                badge_y + 13
-            ),
-            texto_desc,
-            font=fuente(27, True),
-            fill="white"
-        )
-
+    # =====================================================
     # NOMBRE
+    # =====================================================
 
-    y = 665
+    y = 675
 
     font_titulo = fuente(
-        43,
+        42,
         True
     )
 
@@ -1446,63 +1592,38 @@ def crear_imagen_oferta(datos, numero):
         draw,
         datos["nombre"],
         font_titulo,
-        930
+        920
     )
 
     y = dibujar_lineas(
         draw,
         lineas[:3],
-        65,
+        72,
         y,
         font_titulo,
         (10, 10, 10),
-        4
+        3
     )
 
-    # RATING / VENDIDOS
+    # =====================================================
+    # PRECIO / DESCUENTO REAL
+    # =====================================================
 
-    metadata = []
-
-    if datos["rating"]:
-        metadata.append(
-            "★ " + datos["rating"]
-        )
-
-    if datos["vendidos"]:
-        metadata.append(
-            datos["vendidos"]
-        )
-
-    if metadata:
-
-        y += 4
-
-        draw.text(
-            (65, y),
-            "  |  ".join(
-                metadata
-            ),
-            font=fuente(25, True),
-            fill=(45, 45, 45)
-        )
-
-        y += 42
-
-    # PRECIO ANTERIOR REAL, SI EXISTE
+    y += 12
 
     if datos["precio_anterior"]:
 
-        font_anterior = fuente(29)
+        font_anterior = fuente(25)
 
         draw.text(
-            (65, y),
+            (72, y),
             datos["precio_anterior"],
             font=font_anterior,
-            fill=(105, 105, 105)
+            fill=(110, 110, 110)
         )
 
         caja = draw.textbbox(
-            (65, y),
+            (72, y),
             datos["precio_anterior"],
             font=font_anterior
         )
@@ -1519,120 +1640,184 @@ def crear_imagen_oferta(datos, numero):
                 caja[2],
                 medio
             ),
-            fill=(105, 105, 105),
+            fill=(110, 110, 110),
             width=3
         )
 
-        y += 40
+        y += 34
 
-    # PRECIO ACTUAL
+    font_precio = fuente(
+        61,
+        True
+    )
 
     draw.text(
-        (65, y),
+        (72, y),
         datos["precio"],
-        font=fuente(62, True),
-        fill=(0, 148, 76)
+        font=font_precio,
+        fill=(30, 118, 239)
     )
 
-    y += 77
-
-    # CUOTAS / INFO DE FINANCIACIÓN
-
-    draw.text(
-        (65, y),
-        datos["cuotas"][:85],
-        font=fuente(28, True),
-        fill=(25, 25, 25)
+    caja_precio = draw.textbbox(
+        (72, y),
+        datos["precio"],
+        font=font_precio
     )
 
+    # Descuento solamente si Mercado Libre realmente lo mostró.
+    if datos["descuento"]:
+
+        x_desc = min(
+            caja_precio[2] + 22,
+            820
+        )
+
+        draw.rounded_rectangle(
+            (
+                x_desc,
+                y + 11,
+                x_desc + 165,
+                y + 62
+            ),
+            radius=10,
+            fill=(0, 156, 82)
+        )
+
+        draw.text(
+            (x_desc + 16, y + 21),
+            datos["descuento"],
+            font=fuente(24, True),
+            fill="white"
+        )
+
+    # =====================================================
     # MEDIOS DE PAGO
-    medios_y = 945
+    # =====================================================
+
+    medios_y = 980
+
     dibujar_medios_pago(
         draw,
         medios_y
     )
 
-    # BLOQUE NEGRO APROBADO
+    # =====================================================
+    # BARRA NEGRA APROBADA
+    # =====================================================
 
-    envio_y = 1065
+    envio_y = 1080
 
     draw.rounded_rectangle(
         (
-            55,
+            90,
             envio_y,
-            1025,
-            envio_y + 73
+            990,
+            envio_y + 68
         ),
-        radius=17,
-        fill=(15, 15, 15)
+        radius=15,
+        fill=(14, 14, 14)
     )
 
-    texto_envio = "ENVÍO PROTEGIDO POR MERCADO LIBRE"
-
-    caja_envio = draw.textbbox(
-        (0, 0),
-        texto_envio,
-        font=fuente(31, True)
+    # camión simple
+    draw.rectangle(
+        (
+            125,
+            envio_y + 23,
+            163,
+            envio_y + 46
+        ),
+        outline="white",
+        width=3
     )
-
-    ancho_envio = (
-        caja_envio[2]
-        - caja_envio[0]
+    draw.rectangle(
+        (
+            163,
+            envio_y + 30,
+            183,
+            envio_y + 46
+        ),
+        outline="white",
+        width=3
+    )
+    draw.ellipse(
+        (
+            132,
+            envio_y + 42,
+            145,
+            envio_y + 55
+        ),
+        fill="white"
+    )
+    draw.ellipse(
+        (
+            166,
+            envio_y + 42,
+            179,
+            envio_y + 55
+        ),
+        fill="white"
     )
 
     draw.text(
-        (
-            (ANCHO - ancho_envio) // 2,
-            envio_y + 18
-        ),
-        texto_envio,
-        font=fuente(31, True),
-        fill=(255, 255, 255)
+        (210, envio_y + 18),
+        "ENVÍO PROTEGIDO POR MERCADO LIBRE",
+        font=fuente(27, True),
+        fill="white"
     )
 
-    # INDICACIÓN REAL: EL LINK ES EL TEXTO QUE WHATSAPP PONE DEBAJO
+    # =====================================================
+    # LINK DEL POST
+    # =====================================================
+
+    link_y = 1165
 
     draw.rounded_rectangle(
         (
-            55,
-            1155,
-            1025,
-            1228
+            90,
+            link_y,
+            990,
+            link_y + 72
         ),
-        radius=20,
-        fill=(255, 248, 222),
-        outline=(238, 224, 165),
+        radius=22,
+        fill=(255, 250, 230),
+        outline=(239, 226, 175),
         width=2
     )
 
-    texto_link = "Tocá el link del post para ver la publicación"
-
-    caja_link = draw.textbbox(
-        (0, 0),
-        texto_link,
-        font=fuente(29, True)
+    # icono de eslabón simple
+    draw.ellipse(
+        (
+            118,
+            link_y + 23,
+            143,
+            link_y + 48
+        ),
+        outline=(45, 50, 119),
+        width=4
     )
-
-    ancho_link = (
-        caja_link[2]
-        - caja_link[0]
+    draw.ellipse(
+        (
+            138,
+            link_y + 23,
+            163,
+            link_y + 48
+        ),
+        outline=(45, 50, 119),
+        width=4
     )
 
     draw.text(
-        (
-            (ANCHO - ancho_link) // 2,
-            1174
-        ),
-        texto_link,
-        font=fuente(29, True),
+        (185, link_y + 22),
+        "Tocá el link del post para ver la publicación",
+        font=fuente(25, True),
         fill=(45, 50, 119)
     )
 
-    # LEYENDA PARA EVITAR CONFUSIÓN CON UN CANAL OFICIAL
+    # ACLARACIÓN NO OFICIAL
 
     dibujar_aviso_independiente(
         draw,
-        1255
+        1265
     )
 
     imagen.save(
@@ -1665,7 +1850,7 @@ def crear_imagen_promo_canal():
     imagen = Image.new(
         "RGB",
         (ANCHO, ALTO),
-        (247, 247, 245)
+        (250, 250, 248)
     )
 
     draw = ImageDraw.Draw(imagen)
@@ -1679,176 +1864,279 @@ def crear_imagen_promo_canal():
         ),
         radius=40,
         fill=(255, 255, 255),
-        outline=(225, 225, 225),
+        outline=(226, 226, 226),
         width=2
     )
 
-    # CABECERA
+    # CABECERA IGUAL AL ESTILO APROBADO
 
     colocar_logo(imagen)
 
     draw.text(
-        (230, 52),
+        (230, 50),
         "Cazadores de Ofertas",
-        font=fuente(46, True),
+        font=fuente(45, True),
         fill=(10, 10, 10)
     )
 
     draw.text(
-        (232, 112),
+        (232, 106),
         "Las mejores ofertas de Mercado Libre, todos los días",
-        font=fuente(25),
-        fill=(75, 75, 75)
+        font=fuente(23),
+        fill=(70, 70, 70)
     )
 
     colocar_logo_mercadolibre(
         imagen,
-        810,
-        38,
-        200,
-        90
+        842,
+        35,
+        132,
+        70
     )
 
-    # MENSAJE CENTRAL
+    # MENSAJE AMARILLO
 
     draw.rounded_rectangle(
         (
             65,
-            195,
-            1015,
-            365
+            190,
+            740,
+            355
         ),
         radius=30,
-        fill=(255, 247, 194)
+        fill=(255, 248, 201)
     )
 
     lineas = ajustar_texto(
         draw,
         (
             "Encontramos, filtramos y compartimos "
-            "oportunidades para que ahorres tiempo y dinero."
+            "oportunidades reales para que ahorres tiempo y dinero."
         ),
-        fuente(39, True),
-        875
+        fuente(34, True),
+        610
     )
 
     dibujar_lineas(
         draw,
-        lineas[:3],
-        100,
-        225,
-        fuente(39, True),
+        lineas[:4],
+        92,
+        218,
+        fuente(34, True),
         (15, 15, 15),
-        6
+        4
     )
 
-    # BENEFICIOS
+    # BENEFICIOS LATERALES
 
     beneficios = [
-        ("OFERTAS", "Productos destacados y oportunidades reales"),
-        ("VARIEDAD", "Tecnología, hogar, moda, herramientas y más"),
-        ("LINK DIRECTO", "Entrás a la publicación de Mercado Libre"),
-        ("AHORRO DE TIEMPO", "Nosotros hacemos la búsqueda por vos"),
+        ("Ofertas reales", "y seleccionadas"),
+        ("Productos", "destacados"),
+        ("Links listos", "para comprar"),
+        ("Ahorro", "de tiempo"),
     ]
 
-    y = 410
+    iconos = ["ranking", "destacado", "cuotas", "ranking"]
+    y = 405
 
-    for titulo, descripcion in beneficios:
+    for i, (titulo, detalle) in enumerate(beneficios):
 
-        draw.rounded_rectangle(
-            (
-                70,
-                y,
-                1010,
-                y + 132
-            ),
-            radius=26,
-            fill=(247, 247, 247),
-            outline=(231, 231, 231),
-            width=2
-        )
-
-        draw.ellipse(
-            (
-                96,
-                y + 28,
-                170,
-                y + 102
-            ),
-            fill=(255, 230, 0)
-        )
-
-        # símbolo simple para mantenerlo robusto
-        draw.text(
-            (116, y + 43),
-            "•",
-            font=fuente(35, True),
-            fill=(45, 50, 119)
+        dibujar_icono_simple(
+            draw,
+            120,
+            y + 36,
+            iconos[i]
         )
 
         draw.text(
-            (200, y + 22),
+            (175, y + 5),
             titulo,
-            font=fuente(31, True),
+            font=fuente(29, True),
             fill=(15, 15, 15)
         )
 
-        lineas_desc = ajustar_texto(
-            draw,
-            descripcion,
-            fuente(25),
-            760
+        draw.text(
+            (175, y + 43),
+            detalle,
+            font=fuente(25),
+            fill=(40, 40, 40)
         )
 
-        dibujar_lineas(
-            draw,
-            lineas_desc[:2],
-            200,
-            y + 66,
-            fuente(25),
-            (55, 55, 55),
-            2
-        )
+        y += 118
 
-        y += 147
+    # TELÉFONO SIMULADO
 
-    # CTA DEL CANAL
+    phone_x0 = 565
+    phone_y0 = 390
+    phone_x1 = 985
+    phone_y1 = 1010
 
     draw.rounded_rectangle(
         (
-            65,
-            1025,
-            1015,
-            1145
+            phone_x0,
+            phone_y0,
+            phone_x1,
+            phone_y1
         ),
-        radius=55,
-        fill=(30, 190, 95)
+        radius=48,
+        fill=(20, 20, 20)
     )
 
-    texto_cta = "Seguí el canal y no te pierdas ninguna oferta"
-
-    caja_cta = draw.textbbox(
-        (0, 0),
-        texto_cta,
-        font=fuente(34, True)
+    draw.rounded_rectangle(
+        (
+            phone_x0 + 17,
+            phone_y0 + 17,
+            phone_x1 - 17,
+            phone_y1 - 17
+        ),
+        radius=38,
+        fill=(248, 248, 248)
     )
 
-    ancho_cta = (
-        caja_cta[2]
-        - caja_cta[0]
+    # cabecera dentro del celular
+    draw.ellipse(
+        (
+            phone_x0 + 38,
+            phone_y0 + 50,
+            phone_x0 + 105,
+            phone_y0 + 117
+        ),
+        fill=(255, 230, 0),
+        outline=(25, 25, 25),
+        width=3
     )
 
     draw.text(
-        (
-            (ANCHO - ancho_cta) // 2,
-            1062
-        ),
-        texto_cta,
-        font=fuente(34, True),
-        fill="white"
+        (phone_x0 + 125, phone_y0 + 52),
+        "Cazadores de Ofertas",
+        font=fuente(22, True),
+        fill=(15, 15, 15)
     )
 
-    # CHIPS INFERIORES, SIN INVENTAR CANTIDAD DE SEGUIDORES
+    draw.text(
+        (phone_x0 + 125, phone_y0 + 82),
+        "Canal de WhatsApp",
+        font=fuente(18),
+        fill=(95, 95, 95)
+    )
+
+    # tarjetas internas estilo WhatsApp
+    mensajes = [
+        (
+            "Las mejores ofertas,\ntodos los días",
+            (224, 248, 225)
+        ),
+        (
+            "Electrónica, hogar,\nmoda y mucho más",
+            (255, 255, 255)
+        ),
+        (
+            "Aprovechá antes\nque se agoten",
+            (224, 248, 225)
+        ),
+    ]
+
+    my = phone_y0 + 155
+
+    for mensaje, color in mensajes:
+
+        draw.rounded_rectangle(
+            (
+                phone_x0 + 45,
+                my,
+                phone_x1 - 45,
+                my + 118
+            ),
+            radius=24,
+            fill=color,
+            outline=(230, 230, 230),
+            width=1
+        )
+
+        lineas_m = mensaje.split("\n")
+
+        pos_y = my + 22
+
+        for linea in lineas_m:
+
+            draw.text(
+                (phone_x0 + 70, pos_y),
+                linea,
+                font=fuente(22, True),
+                fill=(35, 35, 35)
+            )
+
+            pos_y += 30
+
+        my += 145
+
+    # GLOBO "OFERTAS TODOS LOS DÍAS"
+
+    draw.rounded_rectangle(
+        (
+            360,
+            875,
+            660,
+            985
+        ),
+        radius=34,
+        fill=(255, 230, 0)
+    )
+
+    texto_centrado(
+        draw,
+        "Ofertas",
+        898,
+        fuente(31, True),
+        (45, 50, 119),
+        360,
+        660
+    )
+
+    texto_centrado(
+        draw,
+        "todos los días",
+        937,
+        fuente(25, True),
+        (45, 50, 119),
+        360,
+        660
+    )
+
+    # CTA VERDE
+
+    draw.rounded_rectangle(
+        (
+            85,
+            1035,
+            995,
+            1165
+        ),
+        radius=60,
+        fill=(29, 190, 94)
+    )
+
+    texto_centrado(
+        draw,
+        "Seguí el canal y no te pierdas",
+        1064,
+        fuente(33, True),
+        "white",
+        85,
+        995
+    )
+
+    texto_centrado(
+        draw,
+        "ninguna oferta",
+        1105,
+        fuente(33, True),
+        "white",
+        85,
+        995
+    )
+
+    # CHIPS INFERIORES
 
     chips = [
         "100% GRATIS",
@@ -1856,52 +2144,27 @@ def crear_imagen_promo_canal():
         "OFERTAS TODOS LOS DÍAS",
     ]
 
-    x = 85
+    xs = [
+        (82, 310),
+        (326, 695),
+        (711, 1000),
+    ]
 
-    for texto in chips:
+    for texto, (x0, x1) in zip(chips, xs):
 
-        caja = draw.textbbox(
-            (0, 0),
+        texto_centrado(
+            draw,
             texto,
-            font=fuente(20, True)
+            1207,
+            fuente(18, True),
+            (40, 40, 40),
+            x0,
+            x1
         )
-
-        ancho_chip = (
-            caja[2]
-            - caja[0]
-            + 36
-        )
-
-        draw.rounded_rectangle(
-            (
-                x,
-                1180,
-                x + ancho_chip,
-                1234
-            ),
-            radius=20,
-            fill=(245, 245, 245),
-            outline=(220, 220, 220),
-            width=2
-        )
-
-        draw.text(
-            (
-                x + 18,
-                1196
-            ),
-            texto,
-            font=fuente(20, True),
-            fill=(40, 40, 40)
-        )
-
-        x += ancho_chip + 18
-
-    # AVISO NO OFICIAL
 
     dibujar_aviso_independiente(
         draw,
-        1260
+        1272
     )
 
     imagen.save(
