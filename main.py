@@ -1,13 +1,17 @@
 import random
 import re
+import json
+import html
 import requests
+from bs4 import BeautifulSoup
 
 HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "Mozilla/5.0 (Linux; Android 14; Mobile) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    )
+        "Chrome/153.0.0.0 Mobile Safari/537.36"
+    ),
+    "Accept-Language": "es-AR,es;q=0.9",
 }
 
 
@@ -16,13 +20,10 @@ def obtener_productos_mas_vendidos():
     links_encontrados = []
 
     try:
-        response = requests.get(url, headers=HEADERS, timeout=15)
-
+        response = requests.get(url, headers=HEADERS, timeout=20)
         print(f"DEBUG Status Más Vendidos: {response.status_code}")
 
         if response.status_code == 200:
-            from bs4 import BeautifulSoup
-
             soup = BeautifulSoup(response.text, "html.parser")
 
             for a in soup.find_all("a", href=True):
@@ -32,16 +33,13 @@ def obtener_productos_mas_vendidos():
                     ("/p/MLA" in href or "/MLA-" in href)
                     and "mas-vendidos" not in href
                 ):
-                    link_limpio = href.split("?")[0]
+                    link = href.split("?")[0]
 
-                    if link_limpio.startswith("/"):
-                        link_limpio = (
-                            "https://www.mercadolibre.com.ar"
-                            + link_limpio
-                        )
+                    if link.startswith("/"):
+                        link = "https://www.mercadolibre.com.ar" + link
 
-                    if link_limpio not in links_encontrados:
-                        links_encontrados.append(link_limpio)
+                    if link not in links_encontrados:
+                        links_encontrados.append(link)
 
     except Exception as e:
         print(f"ERROR Más Vendidos: {e}")
@@ -52,133 +50,201 @@ def obtener_productos_mas_vendidos():
     return links_encontrados[:10]
 
 
-def extraer_id(url):
-    # Caso catálogo:
-    # https://www.mercadolibre.com.ar/.../p/MLA123456
-    match_catalogo = re.search(
-        r"/p/(MLA\d+)",
-        url,
-        re.IGNORECASE
-    )
-
-    if match_catalogo:
-        return "catalogo", match_catalogo.group(1).upper()
-
-    # Caso publicación:
-    # https://articulo.mercadolibre.com.ar/MLA-123456...
-    match_item = re.search(
-        r"/MLA-(\d+)",
-        url,
-        re.IGNORECASE
-    )
-
-    if match_item:
-        return "item", "MLA" + match_item.group(1)
-
-    return None, None
-
-
 def formatear_precio(valor):
     try:
         numero = float(valor)
-
         return "$" + f"{numero:,.0f}".replace(",", ".")
-
     except Exception:
-        return str(valor)
+        return "Precio no disponible"
 
 
-def consultar_item(item_id):
-    url_api = f"https://api.mercadolibre.com/items/{item_id}"
+def buscar_json(objeto):
+    """
+    Recorre estructuras JSON embebidas en la página buscando
+    título, precio y datos de cuotas.
+    """
+    resultados = []
 
-    try:
-        r = requests.get(url_api, timeout=15)
-
-        print(f"   API item {item_id}: HTTP {r.status_code}")
-
-        if r.status_code == 200:
-            datos = r.json()
-
-            nombre = datos.get("title") or "Nombre no disponible"
-            precio = datos.get("price")
-
-            if precio is not None:
-                precio = formatear_precio(precio)
-            else:
-                precio = "Precio no disponible"
-
-            return nombre, precio
-
-    except Exception as e:
-        print(f"   ERROR API item: {e}")
-
-    return "Nombre no disponible", "Precio no disponible"
-
-
-def consultar_catalogo(product_id):
-    url_api = (
-        "https://api.mercadolibre.com/products/"
-        + product_id
-    )
-
-    try:
-        r = requests.get(url_api, timeout=15)
-
-        print(
-            f"   API catálogo {product_id}: "
-            f"HTTP {r.status_code}"
-        )
-
-        if r.status_code == 200:
-            datos = r.json()
-
-            nombre = (
-                datos.get("name")
-                or datos.get("title")
-                or "Nombre no disponible"
+    def recorrer(obj):
+        if isinstance(obj, dict):
+            titulo = (
+                obj.get("title")
+                or obj.get("name")
             )
 
-            precio = "Precio no disponible"
+            precio = (
+                obj.get("price")
+                or obj.get("amount")
+            )
 
-            buy_box = datos.get("buy_box_winner")
+            cuotas = None
 
-            if isinstance(buy_box, dict):
-                precio_valor = buy_box.get("price")
+            installments = obj.get("installments")
 
-                if precio_valor is not None:
-                    precio = formatear_precio(precio_valor)
+            if isinstance(installments, dict):
+                cantidad = (
+                    installments.get("quantity")
+                    or installments.get("installments")
+                )
+                importe = (
+                    installments.get("amount")
+                    or installments.get("installment_amount")
+                )
 
-                item_id = buy_box.get("item_id")
+                if cantidad:
+                    if importe:
+                        cuotas = (
+                            f"{cantidad} cuotas de "
+                            f"{formatear_precio(importe)}"
+                        )
+                    else:
+                        cuotas = f"{cantidad} cuotas"
 
-                if item_id:
-                    nombre_item, precio_item = consultar_item(item_id)
+            if titulo and precio:
+                resultados.append(
+                    (str(titulo), precio, cuotas)
+                )
 
-                    if nombre == "Nombre no disponible":
-                        nombre = nombre_item
+            for valor in obj.values():
+                recorrer(valor)
 
-                    if precio == "Precio no disponible":
-                        precio = precio_item
+        elif isinstance(obj, list):
+            for valor in obj:
+                recorrer(valor)
 
-            return nombre, precio
+    recorrer(objeto)
 
-    except Exception as e:
-        print(f"   ERROR API catálogo: {e}")
-
-    return "Nombre no disponible", "Precio no disponible"
+    return resultados
 
 
 def obtener_datos_producto(url):
-    tipo, identificador = extraer_id(url)
+    print(f"   Abriendo producto: {url}")
 
-    print(f"   Tipo: {tipo} | ID: {identificador}")
+    try:
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=20,
+            allow_redirects=True
+        )
 
-    if tipo == "item":
-        return consultar_item(identificador)
+        print(f"   HTTP producto: {response.status_code}")
 
-    if tipo == "catalogo":
-        return consultar_catalogo(identificador)
+        if response.status_code != 200:
+            return (
+                "Nombre no disponible",
+                "Precio no disponible",
+                "Consultar cuotas"
+            )
 
-    return "Nombre no disponible", "Precio no disponible"
+        texto = response.text
+        soup = BeautifulSoup(texto, "html.parser")
+
+        # 1. Intentar JSON-LD
+        for script in soup.find_all(
+            "script",
+            attrs={"type": "application/ld+json"}
+        ):
+            try:
+                contenido = script.string or script.get_text()
+
+                if not contenido:
+                    continue
+
+                datos = json.loads(contenido)
+
+                candidatos = buscar_json(datos)
+
+                if candidatos:
+                    nombre, precio, cuotas = candidatos[0]
+
+                    return (
+                        html.unescape(nombre).strip(),
+                        formatear_precio(precio),
+                        cuotas or "Consultar cuotas"
+                    )
+
+            except Exception:
+                pass
+
+        # 2. Buscar metadatos OpenGraph
+        nombre = None
+        precio = None
+
+        meta_titulo = soup.find(
+            "meta",
+            property="og:title"
+        )
+
+        if meta_titulo:
+            nombre = meta_titulo.get("content")
+
+        selectores_precio = [
+            ("meta", {"property": "product:price:amount"}),
+            ("meta", {"itemprop": "price"}),
+        ]
+
+        for etiqueta, atributos in selectores_precio:
+            encontrado = soup.find(etiqueta, attrs=atributos)
+
+            if encontrado:
+                precio = (
+                    encontrado.get("content")
+                    or encontrado.get("value")
+                )
+
+                if precio:
+                    break
+
+        # 3. Buscar precio dentro del HTML
+        if not precio:
+            patrones = [
+                r'"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)',
+                r'"amount"\s*:\s*([0-9]+(?:\.[0-9]+)?)',
+            ]
+
+            for patron in patrones:
+                match = re.search(patron, texto)
+
+                if match:
+                    precio = match.group(1)
+                    break
+
+        # 4. Buscar cuotas en el texto visible
+        cuotas = "Consultar cuotas"
+
+        texto_visible = soup.get_text(" ", strip=True)
+
+        match_cuotas = re.search(
+            r'(\d{1,2})\s+cuotas(?:\s+de\s+\$?\s*([\d\.\,]+))?',
+            texto_visible,
+            re.IGNORECASE
+        )
+
+        if match_cuotas:
+            cantidad = match_cuotas.group(1)
+            importe = match_cuotas.group(2)
+
+            if importe:
+                cuotas = f"{cantidad} cuotas de ${importe}"
+            else:
+                cuotas = f"{cantidad} cuotas"
+
+        if nombre and precio:
+            return (
+                html.unescape(nombre).strip(),
+                formatear_precio(precio),
+                cuotas
+            )
+
+    except Exception as e:
+        print(f"   ERROR producto: {e}")
+
+    return (
+        "Nombre no disponible",
+        "Precio no disponible",
+        "Consultar cuotas"
+    )
 
 
 def guardar_ultima_tanda(productos):
@@ -196,13 +262,12 @@ def guardar_datos_tanda(productos):
     lineas = []
 
     for numero, url in enumerate(productos, start=1):
-
         print(
             f"Obteniendo datos del producto "
             f"{numero}/{len(productos)}..."
         )
 
-        nombre, precio = obtener_datos_producto(url)
+        nombre, precio, cuotas = obtener_datos_producto(url)
 
         nombre = (
             nombre
@@ -211,8 +276,7 @@ def guardar_datos_tanda(productos):
             .strip()
         )
 
-        linea = f"{nombre} | {precio}"
-
+        linea = f"{nombre} | {precio} | {cuotas}"
         lineas.append(linea)
 
         print(f"   {numero}. {linea}")
@@ -228,13 +292,11 @@ def guardar_datos_tanda(productos):
 
 
 if __name__ == "__main__":
-
     print("--- EXTRAYENDO PRODUCTOS MÁS VENDIDOS ---")
 
     productos = obtener_productos_mas_vendidos()
 
     if productos:
-
         print(f"✅ Se obtuvieron {len(productos)} productos")
 
         guardar_ultima_tanda(productos)
