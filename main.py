@@ -27,7 +27,6 @@ HEADERS = {
 
 CARPETA_OFERTAS = Path("ofertas")
 CARPETA_OFERTAS.mkdir(exist_ok=True)
-
 HISTORIAL_PATH = Path("historial_publicados.txt")
 
 LOGO_PATH = Path("logo_cazadores.png")
@@ -1077,44 +1076,6 @@ def enriquecer_solo_textos_reales(datos):
 
 
 # =========================================================
-# HISTORIAL DE PUBLICACIONES
-# =========================================================
-
-def cargar_historial_publicados():
-    """Devuelve todos los item_id MLA ya usados en tandas anteriores."""
-    if not HISTORIAL_PATH.exists():
-        return set()
-
-    ids = set()
-    for linea in HISTORIAL_PATH.read_text(encoding="utf-8").splitlines():
-        linea = linea.strip().upper()
-        if re.fullmatch(r"MLA\d{7,}", linea):
-            ids.add(linea)
-
-    return ids
-
-
-def guardar_historial_publicados(productos):
-    """
-    Agrega al historial los item_id de la tanda terminada.
-    El workflow de GitHub Actions debe hacer commit de este archivo
-    para que el historial persista entre ejecuciones.
-    """
-    ids = cargar_historial_publicados()
-
-    for producto in productos:
-        item_id = limpiar_texto(producto.get("item_id", "")).upper()
-        if re.fullmatch(r"MLA\d{7,}", item_id):
-            ids.add(item_id)
-
-    HISTORIAL_PATH.write_text(
-        "\n".join(sorted(ids)) + ("\n" if ids else ""),
-        encoding="utf-8",
-    )
-    print("✅ historial_publicados.txt actualizado:", len(ids), "IDs")
-
-
-# =========================================================
 # OBTENER PRODUCTOS
 # =========================================================
 
@@ -1442,28 +1403,64 @@ def _url_exacta_con_item(url_base, item_id):
     return urlunsplit((partes.scheme, partes.netloc, partes.path, nueva_query, ""))
 
 
-def obtener_productos():
-    print("--- DESCARGANDO MÁS VENDIDOS ---")
+def cargar_historial_publicados():
+    if not HISTORIAL_PATH.exists():
+        return set()
 
-    response = safe_get(URL_MAS_VENDIDOS, timeout=30)
-    print("HTTP Más vendidos:", response.status_code)
+    ids = set()
+    for linea in HISTORIAL_PATH.read_text(encoding="utf-8").splitlines():
+        linea = linea.strip().upper()
+        if re.fullmatch(r"MLA\d{7,}", linea):
+            ids.add(linea)
+    return ids
 
+
+def guardar_historial_publicados(productos):
+    ids = cargar_historial_publicados()
+    for producto in productos:
+        item_id = limpiar_texto(producto.get("item_id", "")).upper()
+        if re.fullmatch(r"MLA\d{7,}", item_id):
+            ids.add(item_id)
+
+    HISTORIAL_PATH.write_text(
+        "\n".join(sorted(ids)) + ("\n" if ids else ""),
+        encoding="utf-8",
+    )
+    print("✅ historial_publicados.txt actualizado:", len(ids), "IDs")
+
+
+def _urls_mas_vendidos_de_pagina(soup, base_url):
+    """Descubre páginas/categorías de Más vendidos sin salir de Mercado Libre."""
+    urls = []
+    vistos = set()
+    for enlace in soup.find_all("a", href=True):
+        href = limpiar_url(enlace.get("href"))
+        if not href:
+            continue
+        absoluta = urljoin(base_url, href)
+        partes = urlsplit(absoluta)
+        if "mercadolibre.com.ar" not in partes.netloc.lower():
+            continue
+        if "mas-vendidos" not in partes.path.lower():
+            continue
+        limpia = urlunsplit((partes.scheme or "https", partes.netloc, partes.path, partes.query, ""))
+        if limpia not in vistos:
+            vistos.add(limpia)
+            urls.append(limpia)
+    return urls
+
+
+def _extraer_productos_de_mas_vendidos(url_pagina):
+    """Extrae publicaciones exactas de una página de Más vendidos."""
+    response = safe_get(url_pagina, timeout=30)
+    print("HTTP Más vendidos:", response.status_code, "|", url_pagina)
     soup = BeautifulSoup(response.text, "html.parser")
     resultados_embebidos = extraer_resultados_embebidos(soup)
-    if not resultados_embebidos:
-        print(
-            "AVISO: no se pudo decodificar el array embebido. "
-            "Se intentará recuperar item_id dentro de cada tarjeta."
-        )
 
     encontrados = {}
-
     for enlace in soup.find_all("a", href=True):
         url = limpiar_url(enlace.get("href"))
-
-        if not es_producto(url):
-            continue
-        if "mas-vendidos" in url:
+        if not es_producto(url) or "mas-vendidos" in url:
             continue
 
         contenedor = encontrar_contenedor(enlace)
@@ -1476,20 +1473,16 @@ def obtener_productos():
         if exacto:
             item_id = exacto.get("item_id", "")
             precio = exacto.get("precio", "")
-
-            # Si el resultado embebido tiene imagen/título propios, pertenecen
-            # al mismo item_id exacto y por eso son preferibles.
             if exacto.get("imagen_url"):
                 tarjeta["imagen_url"] = exacto["imagen_url"]
             if exacto.get("titulo"):
                 tarjeta["nombre"] = exacto["titulo"]
         else:
-            # Respaldo: item_id escondido dentro de la MISMA tarjeta. En ese
-            # caso el precio y la imagen ya se extrajeron de esa misma tarjeta.
             item_id = _extraer_item_id_del_contenedor(contenedor, url)
             precio = tarjeta.get("precio", "")
 
-        if not item_id:
+        item_id = limpiar_texto(item_id).upper()
+        if not re.fullmatch(r"MLA\d{7,}", item_id):
             continue
         if not precio or precio == "Precio no disponible":
             continue
@@ -1499,32 +1492,65 @@ def obtener_productos():
         tarjeta["item_id"] = item_id
         tarjeta["precio"] = precio
         tarjeta["url_original"] = _url_exacta_con_item(url, item_id)
+        encontrados.setdefault(item_id, tarjeta)
 
-        # Dedupe por publicación exacta, no por catálogo.
-        if item_id not in encontrados:
-            encontrados[item_id] = tarjeta
+    return encontrados, _urls_mas_vendidos_de_pagina(soup, url_pagina)
 
-    productos = list(encontrados.values())
-    print("Productos exactos emparejados:", len(productos))
+
+def obtener_productos():
+    print("--- DESCARGANDO MÁS VENDIDOS ---")
 
     historial = cargar_historial_publicados()
     print("Publicaciones ya usadas en el historial:", len(historial))
 
-    productos_nuevos = [
-        producto for producto in productos
-        if producto.get("item_id", "").upper() not in historial
-    ]
-    print("Productos nuevos disponibles:", len(productos_nuevos))
+    # Empieza por la portada y luego recorre categorías de Más vendidos.
+    # Así no depende de las ~11 publicaciones que aparecen en una sola página.
+    pendientes = deque([URL_MAS_VENDIDOS])
+    paginas_vistas = set()
+    encontrados_nuevos = {}
+    MAX_PAGINAS = 40
 
-    if len(productos_nuevos) < CANTIDAD_PRODUCTOS:
-        raise RuntimeError(
-            f"Solo hay {len(productos_nuevos)} publicaciones nuevas disponibles "
-            f"y se necesitan {CANTIDAD_PRODUCTOS}. "
-            "Se cancela la tanda antes de repetir productos ya publicados."
+    while pendientes and len(paginas_vistas) < MAX_PAGINAS:
+        url_pagina = pendientes.popleft()
+        if url_pagina in paginas_vistas:
+            continue
+        paginas_vistas.add(url_pagina)
+
+        try:
+            encontrados, nuevas_paginas = _extraer_productos_de_mas_vendidos(url_pagina)
+        except Exception as e:
+            print("AVISO: no se pudo leer", url_pagina, "|", e)
+            continue
+
+        for item_id, tarjeta in encontrados.items():
+            if item_id in historial:
+                continue
+            encontrados_nuevos.setdefault(item_id, tarjeta)
+
+        print(
+            "Nuevos únicos acumulados:", len(encontrados_nuevos),
+            "| páginas revisadas:", len(paginas_vistas)
         )
 
-    random.shuffle(productos_nuevos)
-    seleccionados = productos_nuevos[:CANTIDAD_PRODUCTOS]
+        if len(encontrados_nuevos) >= CANTIDAD_PRODUCTOS:
+            break
+
+        for nueva_url in nuevas_paginas:
+            if nueva_url not in paginas_vistas and nueva_url not in pendientes:
+                pendientes.append(nueva_url)
+
+    productos = list(encontrados_nuevos.values())
+    print("Productos nuevos disponibles:", len(productos))
+
+    if len(productos) < CANTIDAD_PRODUCTOS:
+        raise RuntimeError(
+            f"Solo se encontraron {len(productos)} publicaciones nuevas después de revisar "
+            f"{len(paginas_vistas)} páginas de Más vendidos. Se necesitan {CANTIDAD_PRODUCTOS}. "
+            "Se cancela la tanda para no repetir productos ya usados."
+        )
+
+    random.shuffle(productos)
+    seleccionados = productos[:CANTIDAD_PRODUCTOS]
 
     resultado = []
     for numero, producto in enumerate(seleccionados, start=1):
@@ -1533,8 +1559,6 @@ def obtener_productos():
             f"{producto['nombre']} | precio={producto['precio']} | "
             f"url={producto['url_original']}"
         )
-
-        # Solo agrega textos laterales. Esta función no cambia precio, link ni foto.
         producto = enriquecer_solo_textos_reales(producto)
         resultado.append(producto)
 
