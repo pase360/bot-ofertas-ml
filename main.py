@@ -128,12 +128,7 @@ def nombre_desde_url(url):
 
 
 def safe_get(url, timeout=30):
-    headers = dict(HEADERS)
-    headers.update({
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-    })
-    response = requests.get(url, headers=headers, timeout=timeout)
+    response = requests.get(url, headers=HEADERS, timeout=timeout)
     response.raise_for_status()
     return response
 
@@ -143,40 +138,73 @@ def safe_get(url, timeout=30):
 # =========================================================
 
 def encontrar_contenedor(enlace):
-    nodo = enlace
+    """
+    Encuentra la tarjeta MÁS PEQUEÑA que contiene exactamente el producto
+    del enlace. Esto evita mezclar precio o imagen de una tarjeta vecina.
+    """
+    url_objetivo = limpiar_url(enlace.get("href"))
     candidatos = []
 
-    for _ in range(10):
-        nodo = nodo.parent
-
+    for nodo in enlace.parents:
         if not isinstance(nodo, Tag):
-            break
+            continue
 
         texto = limpiar_texto(nodo.get_text(" ", strip=True))
-
-        if not texto:
-            continue
-        if len(texto) > 3000:
+        if not texto or len(texto) > 3500:
             continue
 
-        tiene_precio = "$" in texto
+        # Contar productos distintos dentro del ancestro.
+        urls_productos = []
+        for a in nodo.find_all("a", href=True):
+            u = limpiar_url(a.get("href"))
+            if es_producto(u) and u not in urls_productos:
+                urls_productos.append(u)
+
+        if url_objetivo not in urls_productos:
+            continue
+
+        tiene_precio = nodo.select_one(".andes-money-amount") is not None or "$" in texto
         tiene_imagen = nodo.find("img") is not None
-        tiene_datos = bool(
-            re.search(
-                r"vendidos|cuotas|%\s*OFF|MÁS VENDIDO|MAS VENDIDO",
-                texto,
-                re.IGNORECASE,
+
+        if not (tiene_precio and tiene_imagen):
+            continue
+
+        clases = " ".join(nodo.get("class", [])).lower()
+        es_tarjeta_tipica = any(
+            marca in clases
+            for marca in (
+                "poly-card",
+                "ui-search-result",
+                "ui-search-layout__item",
+                "andes-card",
             )
         )
 
-        if tiene_precio and tiene_imagen:
-            candidatos.append((nodo, tiene_datos, len(texto)))
-            if tiene_datos:
-                return nodo
+        # Preferimos contenedores con un solo producto. Si hay más de uno,
+        # guardamos como respaldo pero penalizado.
+        cantidad_productos = len(urls_productos)
+        puntuacion = 0
+        if cantidad_productos == 1:
+            puntuacion += 100
+        elif cantidad_productos == 2:
+            puntuacion += 10
+        else:
+            puntuacion -= cantidad_productos * 10
+
+        if es_tarjeta_tipica:
+            puntuacion += 30
+
+        # Cuanto más chico el HTML, más probable que sea la tarjeta exacta.
+        puntuacion -= min(len(texto), 3000) / 1000
+        candidatos.append((puntuacion, len(texto), nodo))
+
+        # Un contenedor típico con un solo producto es suficientemente seguro.
+        if cantidad_productos == 1 and es_tarjeta_tipica:
+            return nodo
 
     if candidatos:
-        candidatos.sort(key=lambda item: item[2])
-        return candidatos[0][0]
+        candidatos.sort(key=lambda x: (-x[0], x[1]))
+        return candidatos[0][2]
 
     return enlace.parent
 
@@ -404,68 +432,121 @@ def extraer_importes_texto(texto):
     return resultado
 
 
+def _es_precio_anterior_tarjeta(elemento):
+    nodo = elemento
+    for _ in range(6):
+        if nodo is None or not isinstance(nodo, Tag):
+            break
+
+        clases = " ".join(nodo.get("class", []))
+        attrs = " ".join(
+            str(nodo.get(k, ""))
+            for k in ("id", "data-testid", "aria-label")
+        )
+        inferior = (clases + " " + attrs).lower()
+
+        if any(
+            marca in inferior
+            for marca in (
+                "previous",
+                "original",
+                "strikethrough",
+                "old-price",
+                "price-before",
+                "list-price",
+            )
+        ):
+            return True
+
+        nodo = nodo.parent
+
+    return False
+
+
+def _precios_actuales_tarjeta(contenedor, selector):
+    encontrados = []
+
+    try:
+        nodos = contenedor.select(selector)
+    except Exception:
+        nodos = []
+
+    for nodo in nodos:
+        if _es_precio_anterior_tarjeta(nodo):
+            continue
+
+        valor = leer_money_amount(nodo)
+        if valor and valor not in encontrados:
+            encontrados.append(valor)
+
+    return encontrados
+
+
 def obtener_precios(contenedor, texto, descuento):
-    precio = ""
+    """
+    Obtiene el precio ACTUAL de la MISMA tarjeta de Más vendidos.
+
+    Reglas de seguridad:
+    - nunca usa el precio tachado/original;
+    - nunca toma importes del texto libre;
+    - nunca supone que el segundo importe es el actual;
+    - si hay más de un precio actual distinto y no puede resolverlo,
+      marca el producto como no verificable para descartarlo.
+    """
     precio_anterior = ""
 
-    anteriores = [
+    # Solo para conservar el dato informativo de precio anterior.
+    for selector in (
         ".andes-money-amount--previous",
         ".poly-price__original .andes-money-amount",
         ".ui-search-price__original-value .andes-money-amount",
         "[class*='original'] .andes-money-amount",
         "[class*='previous'] .andes-money-amount",
-    ]
+    ):
+        try:
+            nodos = contenedor.select(selector)
+        except Exception:
+            nodos = []
 
-    for selector in anteriores:
-        elemento = contenedor.select_one(selector)
-        valor = leer_money_amount(elemento)
-        if valor:
-            precio_anterior = valor
+        for nodo in nodos:
+            valor = leer_money_amount(nodo)
+            if valor:
+                precio_anterior = valor
+                break
+        if precio_anterior:
             break
 
-    actuales = [
+    # Selectores del precio de venta ACTUAL, de más específico a más general.
+    selectores_actuales = (
         ".poly-price__current .andes-money-amount",
+        ".poly-component__price .andes-money-amount",
         ".ui-search-price__second-line .andes-money-amount",
+        "[data-testid='price-part'] .andes-money-amount",
         "[class*='current'] .andes-money-amount",
-    ]
+    )
 
-    for selector in actuales:
-        elemento = contenedor.select_one(selector)
-        valor = leer_money_amount(elemento)
-        if valor:
-            precio = valor
-            break
+    for selector in selectores_actuales:
+        valores = _precios_actuales_tarjeta(contenedor, selector)
 
-    if not precio:
-        valores = []
+        if len(valores) == 1:
+            return valores[0], precio_anterior
 
-        for elemento in contenedor.select(".andes-money-amount"):
-            valor = leer_money_amount(elemento)
-            if valor and valor not in valores:
-                valores.append(valor)
+        if len(valores) > 1:
+            # No elegir uno arbitrariamente.
+            print("PRECIO AMBIGUO EN TARJETA:", valores)
+            return "Precio no disponible", precio_anterior
 
-        if valores:
-            if descuento and len(valores) >= 2:
-                if not precio_anterior:
-                    precio_anterior = valores[0]
-                precio = valores[1]
-            else:
-                precio = valores[0]
+    # Último respaldo: cualquier money-amount de ESTA tarjeta, excluyendo
+    # expresamente los precios anteriores. Debe quedar un único valor.
+    valores = _precios_actuales_tarjeta(contenedor, ".andes-money-amount")
 
-    if not precio:
-        importes = extraer_importes_texto(texto)
-        if importes:
-            if descuento and len(importes) >= 2:
-                if not precio_anterior:
-                    precio_anterior = importes[0]
-                precio = importes[1]
-            else:
-                precio = importes[0]
+    if len(valores) == 1:
+        return valores[0], precio_anterior
 
-    if not precio:
-        precio = "Precio no disponible"
+    if len(valores) > 1:
+        print("PRECIO AMBIGUO EN TARJETA (respaldo):", valores)
 
-    return precio, precio_anterior
+    return "Precio no disponible", precio_anterior
 
 
 # =========================================================
@@ -540,6 +621,7 @@ def extraer_datos_tarjeta(enlace, contenedor):
         "nombre": nombre,
         "precio": precio,
         "precio_anterior": precio_anterior,
+        "precio_verificado": precio != "Precio no disponible",
         "descuento": descuento,
         "cuotas": cuotas,
         "ranking": ranking,
@@ -653,124 +735,10 @@ def _formatear_precio(numero):
     return "$ " + f"{entero:,}".replace(",", ".") + f",{centavos:02d}"
 
 
-def _precio_nodo_money(elemento):
-    """Convierte un nodo .andes-money-amount en precio ARS normalizado."""
-    if not elemento:
-        return ""
-
-    if _es_precio_anterior(elemento):
-        return ""
-
-    valor = leer_money_amount(elemento)
-    numero = _normalizar_numero_precio(valor)
-    if numero is None:
-        return ""
-
-    return _formatear_precio(numero)
-
-
-def _es_precio_anterior(elemento):
-    """
-    Detecta cualquier precio tachado/anterior recorriendo el propio nodo
-    y sus contenedores cercanos.
-    """
-    nodo = elemento
-    for _ in range(7):
-        if nodo is None or not isinstance(nodo, Tag):
-            break
-
-        clases = " ".join(nodo.get("class", []))
-        attrs = " ".join(
-            str(nodo.get(k, ""))
-            for k in ("id", "data-testid", "aria-label")
-        )
-        inferior = (clases + " " + attrs).lower()
-
-        if any(
-            x in inferior
-            for x in (
-                "previous",
-                "original",
-                "strikethrough",
-                "old-price",
-                "price-before",
-                "list-price",
-            )
-        ):
-            return True
-
-        nodo = nodo.parent
-
-    return False
-
-
-def _precios_unicos(valores):
-    resultado = []
-    for valor in valores:
-        if valor and valor not in resultado:
-            resultado.append(valor)
-    return resultado
-
-
-def precios_desde_dom_actual(soup):
-    """
-    Extrae SOLO el precio visible actual del bloque principal de la PDP.
-
-    No mira precios anteriores, recomendaciones, cuotas ni texto libre.
-    Devuelve una lista porque si aparecen dos precios distintos en el bloque
-    principal se considera ambiguo y el producto se descarta.
-    """
+def precio_desde_json_ld(soup):
+    """Busca el precio ACTUAL estructurado del Product/Offer."""
     if not soup:
-        return []
-
-    selectores = [
-        # Bloque superior principal: máxima prioridad.
-        ".ui-pdp-container__top-wrapper .ui-pdp-price__second-line .andes-money-amount",
-        ".ui-pdp-container__col--right .ui-pdp-price__second-line .andes-money-amount",
-        "main .ui-pdp-price__second-line .andes-money-amount",
-        # Respaldo todavía limitado al bloque de precio de la PDP.
-        ".ui-pdp-price__second-line .andes-money-amount",
-        "[data-testid='price-part'] .andes-money-amount",
-    ]
-
-    for selector in selectores:
-        try:
-            nodos = soup.select(selector)
-        except Exception:
-            nodos = []
-
-        encontrados = []
-        for nodo in nodos:
-            precio = _precio_nodo_money(nodo)
-            if precio:
-                encontrados.append(precio)
-
-        encontrados = _precios_unicos(encontrados)
-
-        # Si este selector encontró un único valor, es el precio visible actual.
-        if len(encontrados) == 1:
-            return encontrados
-
-        # Si encontró más de uno distinto, NO elegimos "el primero".
-        # Eso evita tomar cuotas, otra oferta o un precio de vendedor distinto.
-        if len(encontrados) > 1:
-            return encontrados
-
-    return []
-
-
-def precios_desde_json_ld_actual(soup):
-    """
-    Respaldo estructurado estricto.
-
-    IMPORTANTE: usa únicamente la clave `price`.
-    Nunca usa `lowPrice`, porque en páginas de catálogo puede ser el precio
-    mínimo de otra oferta y no el que ve el comprador en la publicación.
-    """
-    if not soup:
-        return []
-
-    encontrados = []
+        return ""
 
     for item in extraer_json_ld(soup):
         for nodo in _iterar_json(item):
@@ -778,41 +746,40 @@ def precios_desde_json_ld_actual(soup):
             tipos = tipo if isinstance(tipo, list) else [tipo]
             tipos = [str(x).lower() for x in tipos if x]
 
+            # Product -> offers
             if "product" in tipos:
                 offers = nodo.get("offers")
                 if isinstance(offers, dict):
                     offers = [offers]
-
                 if isinstance(offers, list):
                     for offer in offers:
                         if not isinstance(offer, dict):
                             continue
-                        numero = _normalizar_numero_precio(offer.get("price"))
-                        if numero is not None:
-                            encontrados.append(_formatear_precio(numero))
+                        for clave in ("price", "lowPrice"):
+                            numero = _normalizar_numero_precio(offer.get(clave))
+                            if numero is not None:
+                                return _formatear_precio(numero)
 
-            if "offer" in tipos:
-                numero = _normalizar_numero_precio(nodo.get("price"))
-                if numero is not None:
-                    encontrados.append(_formatear_precio(numero))
+            # Offer directo
+            if "offer" in tipos or "aggregateoffer" in tipos:
+                for clave in ("price", "lowPrice"):
+                    numero = _normalizar_numero_precio(nodo.get(clave))
+                    if numero is not None:
+                        return _formatear_precio(numero)
 
-    return _precios_unicos(encontrados)
+    return ""
 
 
-def precios_desde_meta_actual(soup):
-    """
-    Segundo respaldo estructurado. No usa OG genérico ni texto libre.
-    """
+def precio_desde_meta(soup):
     if not soup:
-        return []
+        return ""
 
     selectores = [
         "meta[itemprop='price'][content]",
         "meta[property='product:price:amount'][content]",
+        "meta[property='og:price:amount'][content]",
         "[itemprop='price'][content]",
     ]
-
-    encontrados = []
 
     for selector in selectores:
         try:
@@ -823,57 +790,68 @@ def precios_desde_meta_actual(soup):
         for nodo in nodos:
             numero = _normalizar_numero_precio(nodo.get("content"))
             if numero is not None:
-                encontrados.append(_formatear_precio(numero))
+                return _formatear_precio(numero)
 
-    return _precios_unicos(encontrados)
+    return ""
+
+
+def _es_precio_anterior(elemento):
+    nodo = elemento
+    for _ in range(5):
+        if nodo is None or not isinstance(nodo, Tag):
+            break
+        clases = " ".join(nodo.get("class", []))
+        inferior = clases.lower()
+        if any(x in inferior for x in ("previous", "original", "strikethrough")):
+            return True
+        nodo = nodo.parent
+    return False
+
+
+def precio_desde_dom_actual(soup):
+    """Último respaldo: solo nodos de precio actual, nunca previous/original."""
+    if not soup:
+        return ""
+
+    selectores = [
+        ".ui-pdp-price__second-line .andes-money-amount",
+        ".ui-pdp-price__main-container .andes-money-amount",
+        "[data-testid='price-part'] .andes-money-amount",
+    ]
+
+    for selector in selectores:
+        try:
+            nodos = soup.select(selector)
+        except Exception:
+            nodos = []
+
+        for nodo in nodos:
+            if _es_precio_anterior(nodo):
+                continue
+            valor = leer_money_amount(nodo)
+            numero = _normalizar_numero_precio(valor)
+            if numero is not None:
+                return _formatear_precio(numero)
+
+    return ""
 
 
 def obtener_precio_actual_verificado(soup):
     """
-    Devuelve el precio actual solo cuando puede verificarse sin ambigüedad.
-
-    Orden:
-    1) precio visible ACTUAL en el bloque principal de la publicación;
-    2) si no está en el HTML visible, JSON-LD y meta deben coincidir exactamente.
-
-    Nunca:
-    - toma el precio tachado/anterior;
-    - usa lowPrice de AggregateOffer;
-    - usa el primer importe encontrado en todo el texto;
-    - aproxima un precio.
+    Devuelve SOLO un precio actual verificable.
+    No usa el primer número del texto de la página y no aproxima.
     """
-    dom = precios_desde_dom_actual(soup)
+    for extractor in (
+        precio_desde_json_ld,
+        precio_desde_meta,
+        precio_desde_dom_actual,
+    ):
+        precio = extractor(soup)
+        if precio:
+            return precio
 
-    if len(dom) == 1:
-        print("PRECIO VERIFICADO DOM:", dom[0])
-        return dom[0]
-
-    if len(dom) > 1:
-        print("PRECIO AMBIGUO EN DOM, se descarta:", dom)
-        return ""
-
-    json_precios = precios_desde_json_ld_actual(soup)
-    meta_precios = precios_desde_meta_actual(soup)
-
-    if len(json_precios) == 1 and len(meta_precios) == 1:
-        if json_precios[0] == meta_precios[0]:
-            print("PRECIO VERIFICADO ESTRUCTURADO:", json_precios[0])
-            return json_precios[0]
-
-        print(
-            "PRECIO ESTRUCTURADO NO COINCIDE, se descarta:",
-            json_precios,
-            meta_precios,
-        )
-        return ""
-
-    print(
-        "PRECIO NO VERIFICABLE, se descarta. JSON:",
-        json_precios,
-        "META:",
-        meta_precios,
-    )
     return ""
+
 
 def es_texto_util_atributo(texto, nombre_producto=""):
     texto = limpiar_texto(texto)
@@ -1091,35 +1069,34 @@ def obtener_atributos_reales_publicacion(soup, titulo):
 
 def enriquecer_solo_textos_reales(datos):
     """
-    Consulta la publicación individual para:
-    - obtener textos reales;
-    - verificar el PRECIO ACTUAL exacto.
+    La publicación individual se consulta SOLO para obtener características
+    reales del producto. El precio y la foto permanecen exactamente como
+    fueron extraídos de la misma tarjeta de Más vendidos.
 
-    La imagen SIEMPRE se conserva desde Más vendidos.
-    Si el precio actual no puede verificarse, el producto queda marcado
-    como no válido y NO se publica.
+    Mercado Libre no expone de forma estable el precio de la PDP a requests
+    sin sesión, por eso NO se usa esa página para reemplazar el precio.
     """
     imagen_original = datos.get("imagen_url", "")
+    precio_original = datos.get("precio", "")
 
     soup, _ = extraer_publicacion(datos["url_original"])
 
-    datos["precio_verificado"] = False
-
     if soup:
-        datos["atributos_visuales"] = obtener_atributos_reales_publicacion(
+        atributos = obtener_atributos_reales_publicacion(
             soup,
             datos["nombre"],
         )
-
-        precio_actual = obtener_precio_actual_verificado(soup)
-        if precio_actual:
-            datos["precio"] = precio_actual
-            datos["precio_verificado"] = True
+        if atributos:
+            datos["atributos_visuales"] = atributos
+        else:
+            datos["atributos_visuales"] = atributos_desde_titulo(datos["nombre"])
     else:
         datos["atributos_visuales"] = atributos_desde_titulo(datos["nombre"])
 
-    # Garantía: jamás sustituir la foto por un logo/imagen de la página.
+    # Garantías: la publicación individual jamás reemplaza precio ni foto.
     datos["imagen_url"] = imagen_original
+    datos["precio"] = precio_original
+    datos["precio_verificado"] = precio_original not in ("", "Precio no disponible")
 
     return datos
 
@@ -1156,8 +1133,8 @@ def obtener_productos():
             puntos += 5
         if datos["imagen_url"]:
             puntos += 6
-        if datos["precio"] != "Precio no disponible":
-            puntos += 1
+        if datos.get("precio_verificado"):
+            puntos += 8
         if datos["descuento"]:
             puntos += 1
         if datos["cuotas"]:
@@ -1175,48 +1152,43 @@ def obtener_productos():
 
     print("Productos encontrados:", len(productos))
 
-    # Para no publicar precios dudosos, la tarjeta de Más vendidos se usa
-    # solo para nombre/foto/candidato. El precio definitivo se valida en
-    # la publicación individual.
+    # Solo candidatos donde link, nombre, foto y precio salen de la MISMA
+    # tarjeta y el precio actual no es ambiguo.
     candidatos = [
         producto
         for producto in productos
         if (
-            producto["imagen_url"]
+            producto.get("precio_verificado")
+            and producto["imagen_url"]
             and producto["nombre"] != "Producto Mercado Libre"
         )
-    ][:60]
+    ]
 
-    random.shuffle(candidatos)
+    print("Productos con tarjeta completa y precio actual único:", len(candidatos))
 
-    verificados = []
+    if len(candidatos) < CANTIDAD_PRODUCTOS:
+        raise RuntimeError(
+            f"Solo se encontraron {len(candidatos)} productos con link, foto y precio actual "
+            "inequívocos en la misma tarjeta de Más vendidos."
+        )
 
-    for numero, producto in enumerate(candidatos, start=1):
-        if len(verificados) >= CANTIDAD_PRODUCTOS:
-            break
+    # Mantener variedad sin perder seguridad.
+    pool = candidatos[:40]
+    seleccionados = random.sample(pool, CANTIDAD_PRODUCTOS)
 
-        print(f"Verificando publicación {numero}/{len(candidatos)}...")
-        producto = enriquecer_solo_textos_reales(producto)
-
-        if not producto.get("precio_verificado"):
-            print("DESCARTADO: no se pudo verificar precio actual:", producto["url_original"])
-            continue
-
-        verificados.append(producto)
-
+    resultado = []
+    for numero, producto in enumerate(seleccionados, start=1):
         print(
-            f"ACEPTADO {len(verificados)}. {producto['nombre']} | "
-            f"precio actual={producto['precio']} | "
+            f"ACEPTADO {numero}. {producto['nombre']} | "
+            f"precio={producto['precio']} | "
             f"foto={producto['imagen_url'][:70]}"
         )
 
-    if len(verificados) < CANTIDAD_PRODUCTOS:
-        raise RuntimeError(
-            f"Solo se pudieron verificar {len(verificados)} productos con precio actual exacto. "
-            "Se cancela la tanda para no publicar precios incorrectos."
-        )
+        # Solo añade características; no modifica precio ni foto.
+        producto = enriquecer_solo_textos_reales(producto)
+        resultado.append(producto)
 
-    return verificados
+    return resultado
 
 
 # =========================================================
