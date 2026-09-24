@@ -6,7 +6,7 @@ from collections import deque
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import urljoin, urlparse, urlsplit, urlunsplit
+from urllib.parse import urljoin, urlparse, urlsplit, urlunsplit, parse_qsl, urlencode
 
 import requests
 from bs4 import BeautifulSoup, Tag
@@ -1078,6 +1078,330 @@ def enriquecer_solo_textos_reales(datos):
 # OBTENER PRODUCTOS
 # =========================================================
 
+
+# =========================================================
+# RESULTADOS EMBEBIDOS DE MERCADO LIBRE
+# =========================================================
+
+def _iterar_diccionarios(obj):
+    """Recorre cualquier JSON y devuelve todos sus diccionarios."""
+    if isinstance(obj, dict):
+        yield obj
+        for valor in obj.values():
+            yield from _iterar_diccionarios(valor)
+    elif isinstance(obj, list):
+        for valor in obj:
+            yield from _iterar_diccionarios(valor)
+
+
+def _cargar_json_de_script(texto):
+    """
+    Mercado Libre puede incrustar JSON puro o una asignación JS que contiene
+    un objeto JSON. Devuelve todos los objetos que pueda decodificar sin
+    ejecutar JavaScript.
+    """
+    if not texto:
+        return []
+
+    texto = texto.strip()
+    resultados = []
+
+    # JSON puro.
+    try:
+        resultados.append(json.loads(texto))
+        return resultados
+    except Exception:
+        pass
+
+    # Asignaciones tipo window.__STATE__ = {...};
+    decoder = json.JSONDecoder()
+    posiciones = [i for i, ch in enumerate(texto) if ch in "{["]
+    # Probar solo los primeros comienzos razonables para no hacer un O(n²)
+    # sobre scripts gigantes.
+    for pos in posiciones[:30]:
+        try:
+            obj, _ = decoder.raw_decode(texto[pos:])
+            resultados.append(obj)
+            break
+        except Exception:
+            continue
+
+    return resultados
+
+
+def _extraer_item_id_dict(d):
+    for clave in ("item_id", "itemId", "itemID"):
+        valor = d.get(clave)
+        if isinstance(valor, str) and re.fullmatch(r"MLA\d{7,}", valor):
+            return valor
+
+    # Algunos resultados usan simplemente id para el item. Solo se acepta si
+    # el mismo objeto también parece un resultado comercial (precio/título).
+    valor = d.get("id")
+    if (
+        isinstance(valor, str)
+        and re.fullmatch(r"MLA\d{9,}", valor)
+        and any(k in d for k in ("price", "title", "permalink", "thumbnail"))
+    ):
+        return valor
+
+    return ""
+
+
+def _extraer_catalog_id_dict(d):
+    for clave in (
+        "catalog_product_id", "catalogProductId", "catalog_product",
+        "product_id", "productId"
+    ):
+        valor = d.get(clave)
+        if isinstance(valor, str) and re.fullmatch(r"MLA\d{6,}", valor):
+            return valor
+        if isinstance(valor, dict):
+            for sub in ("id", "product_id"):
+                v = valor.get(sub)
+                if isinstance(v, str) and re.fullmatch(r"MLA\d{6,}", v):
+                    return v
+    return ""
+
+
+def _extraer_user_product_id_dict(d):
+    for clave in ("user_product_id", "userProductId"):
+        valor = d.get(clave)
+        if isinstance(valor, str) and re.fullmatch(r"MLAU\d+", valor):
+            return valor
+    return ""
+
+
+def _precio_numerico_desde_valor(valor):
+    if isinstance(valor, (int, float)) and valor > 0:
+        return float(valor)
+
+    if isinstance(valor, str):
+        return _normalizar_numero_precio(valor)
+
+    if isinstance(valor, dict):
+        # Solo precio ACTUAL. Nunca original/list/previous.
+        for clave in ("amount", "value", "current_price", "currentPrice"):
+            if clave in valor:
+                n = _precio_numerico_desde_valor(valor.get(clave))
+                if n:
+                    return n
+    return None
+
+
+def _extraer_precio_actual_dict(d):
+    # Prioridad a nombres explícitos de precio actual.
+    for clave in ("price", "current_price", "currentPrice", "sale_price", "salePrice"):
+        if clave in d:
+            n = _precio_numerico_desde_valor(d.get(clave))
+            if n:
+                return n
+
+    # Estructuras anidadas comunes de polycards.
+    for clave in ("prices", "price_data", "priceData"):
+        bloque = d.get(clave)
+        if isinstance(bloque, dict):
+            for sub in ("price", "current_price", "currentPrice", "sale_price", "amount"):
+                if sub in bloque:
+                    n = _precio_numerico_desde_valor(bloque.get(sub))
+                    if n:
+                        return n
+
+    return None
+
+
+def _extraer_titulo_dict(d):
+    for clave in ("title", "name"):
+        valor = d.get(clave)
+        if isinstance(valor, str):
+            valor = limpiar_texto(valor)
+            if 5 <= len(valor) <= 250:
+                return valor
+    return ""
+
+
+def _extraer_imagen_dict(d):
+    candidatos = []
+
+    for clave in ("thumbnail", "thumbnail_url", "thumbnailUrl", "image", "picture"):
+        valor = d.get(clave)
+        if isinstance(valor, str):
+            candidatos.append(valor)
+        elif isinstance(valor, dict):
+            for sub in ("url", "secure_url", "src"):
+                v = valor.get(sub)
+                if isinstance(v, str):
+                    candidatos.append(v)
+
+    pictures = d.get("pictures")
+    if isinstance(pictures, list):
+        for pic in pictures[:3]:
+            if isinstance(pic, str):
+                candidatos.append(pic)
+            elif isinstance(pic, dict):
+                for sub in ("url", "secure_url", "src"):
+                    v = pic.get(sub)
+                    if isinstance(v, str):
+                        candidatos.append(v)
+
+    for url in candidatos:
+        if not isinstance(url, str):
+            continue
+        url = url.replace("\\/", "/")
+        if url.startswith("//"):
+            url = "https:" + url
+        if not url.startswith("http"):
+            continue
+        inferior = url.lower()
+        if any(x in inferior for x in ("logo", "icon", "sprite", "favicon")):
+            continue
+        if "mlstatic" in inferior or "http" in inferior:
+            return url
+
+    return ""
+
+
+def extraer_resultados_embebidos(soup):
+    """
+    Extrae el item_id, precio y demás datos del array de resultados que
+    Mercado Libre incrusta en la propia página. Esto evita depender de que el
+    href visible de la tarjeta sea /p/MLA... (catálogo) o una publicación.
+    """
+    resultados = []
+    vistos = set()
+
+    for script in soup.find_all("script"):
+        texto = script.string or script.get_text("", strip=False)
+        if not texto or "MLA" not in texto:
+            continue
+
+        for raiz in _cargar_json_de_script(texto):
+            for d in _iterar_diccionarios(raiz):
+                item_id = _extraer_item_id_dict(d)
+                if not item_id or item_id in vistos:
+                    continue
+
+                precio_num = _extraer_precio_actual_dict(d)
+                titulo = _extraer_titulo_dict(d)
+                catalog_id = _extraer_catalog_id_dict(d)
+                user_product_id = _extraer_user_product_id_dict(d)
+                imagen = _extraer_imagen_dict(d)
+
+                # Necesitamos al menos precio y algún dato que permita asociar
+                # el item con una tarjeta concreta.
+                if precio_num is None:
+                    continue
+                if not (catalog_id or user_product_id or titulo):
+                    continue
+
+                vistos.add(item_id)
+                resultados.append({
+                    "item_id": item_id,
+                    "catalog_product_id": catalog_id,
+                    "user_product_id": user_product_id,
+                    "precio": _formatear_precio(precio_num),
+                    "precio_num": precio_num,
+                    "titulo": titulo,
+                    "imagen_url": imagen,
+                })
+
+    print("Resultados embebidos con item_id + precio:", len(resultados))
+    return resultados
+
+
+def _catalog_id_desde_url(url):
+    m = re.search(r"/p/(MLA\d+)", url or "", re.IGNORECASE)
+    return m.group(1).upper() if m else ""
+
+
+def _user_product_id_desde_url(url):
+    m = re.search(r"/up/(MLAU\d+)", url or "", re.IGNORECASE)
+    return m.group(1).upper() if m else ""
+
+
+def _titulo_normalizado_para_match(texto):
+    texto = limpiar_texto(texto).lower()
+    texto = re.sub(r"[^a-z0-9áéíóúüñ ]+", " ", texto)
+    return re.sub(r"\s+", " ", texto).strip()
+
+
+def _buscar_resultado_para_tarjeta(datos_tarjeta, resultados_embebidos):
+    url = datos_tarjeta.get("url_original", "")
+    catalog_id = _catalog_id_desde_url(url)
+    user_product_id = _user_product_id_desde_url(url)
+
+    if catalog_id:
+        candidatos = [
+            r for r in resultados_embebidos
+            if r.get("catalog_product_id") == catalog_id
+        ]
+        if candidatos:
+            return candidatos[0]
+
+    if user_product_id:
+        candidatos = [
+            r for r in resultados_embebidos
+            if r.get("user_product_id") == user_product_id
+        ]
+        if candidatos:
+            return candidatos[0]
+
+    # Último respaldo: título casi idéntico.
+    titulo = _titulo_normalizado_para_match(datos_tarjeta.get("nombre", ""))
+    if titulo:
+        for r in resultados_embebidos:
+            rt = _titulo_normalizado_para_match(r.get("titulo", ""))
+            if rt and (rt == titulo or rt in titulo or titulo in rt):
+                return r
+
+    return None
+
+
+
+
+def _extraer_item_id_del_contenedor(contenedor, url=""):
+    """
+    Respaldo muy conservador: busca un item_id explícito dentro del HTML de
+    LA MISMA tarjeta. No confunde el MLA del catálogo /p/MLA... con el item,
+    porque solo acepta IDs asociados a item_id, wid o data-item-id.
+    """
+    partes = [url or ""]
+    try:
+        partes.append(str(contenedor))
+    except Exception:
+        pass
+
+    texto = requests.utils.unquote(" ".join(partes)).replace("&quot;", '"')
+
+    patrones = [
+        r"pdp_filters[^\s\"'<>]*item[_-]?id[:=](MLA\d{7,})",
+        r"(?:^|[?&#])wid=(MLA\d{7,})",
+        r"[\"']item[_-]?id[\"']\s*[:=]\s*[\"'](MLA\d{7,})[\"']",
+        r"data-item-id=[\"'](MLA\d{7,})[\"']",
+        r"data-id=[\"'](MLA\d{9,})[\"']",
+    ]
+
+    for patron in patrones:
+        m = re.search(patron, texto, re.IGNORECASE)
+        if m:
+            return m.group(1).upper()
+
+    return ""
+
+def _url_exacta_con_item(url_base, item_id):
+    """
+    Conserva la página de producto (/p o /up), pero fija la publicación
+    exacta mediante pdp_filters=item_id y wid. Mercado Libre usa esta forma
+    en los links compartidos para identificar una oferta concreta.
+    """
+    partes = urlsplit(url_base)
+    query = dict(parse_qsl(partes.query, keep_blank_values=True))
+    query["pdp_filters"] = f"item_id:{item_id}"
+    query["wid"] = item_id
+    nueva_query = urlencode(query, doseq=True)
+    return urlunsplit((partes.scheme, partes.netloc, partes.path, nueva_query, ""))
+
+
 def obtener_productos():
     print("--- DESCARGANDO MÁS VENDIDOS ---")
 
@@ -1085,6 +1409,13 @@ def obtener_productos():
     print("HTTP Más vendidos:", response.status_code)
 
     soup = BeautifulSoup(response.text, "html.parser")
+    resultados_embebidos = extraer_resultados_embebidos(soup)
+    if not resultados_embebidos:
+        print(
+            "AVISO: no se pudo decodificar el array embebido. "
+            "Se intentará recuperar item_id dentro de cada tarjeta."
+        )
+
     encontrados = {}
 
     for enlace in soup.find_all("a", href=True):
@@ -1099,76 +1430,61 @@ def obtener_productos():
         if not contenedor:
             continue
 
-        datos = extraer_datos_tarjeta(enlace, contenedor)
+        tarjeta = extraer_datos_tarjeta(enlace, contenedor)
+        exacto = _buscar_resultado_para_tarjeta(tarjeta, resultados_embebidos)
 
-        puntos = 0
-        if datos["nombre"] != "Producto Mercado Libre":
-            puntos += 5
-        if datos["imagen_url"]:
-            puntos += 6
-        if datos["precio"] != "Precio no disponible":
-            puntos += 6
-        if tiene_publicacion_exacta(datos["url_original"]):
-            puntos += 10
-        if datos["descuento"]:
-            puntos += 1
-        if datos["cuotas"]:
-            puntos += 1
-        if datos["ranking"]:
-            puntos += 1
+        if exacto:
+            item_id = exacto.get("item_id", "")
+            precio = exacto.get("precio", "")
 
-        anterior = encontrados.get(url)
-        if anterior is None or puntos > anterior["_puntos"]:
-            datos["_puntos"] = puntos
-            encontrados[url] = datos
+            # Si el resultado embebido tiene imagen/título propios, pertenecen
+            # al mismo item_id exacto y por eso son preferibles.
+            if exacto.get("imagen_url"):
+                tarjeta["imagen_url"] = exacto["imagen_url"]
+            if exacto.get("titulo"):
+                tarjeta["nombre"] = exacto["titulo"]
+        else:
+            # Respaldo: item_id escondido dentro de la MISMA tarjeta. En ese
+            # caso el precio y la imagen ya se extrajeron de esa misma tarjeta.
+            item_id = _extraer_item_id_del_contenedor(contenedor, url)
+            precio = tarjeta.get("precio", "")
+
+        if not item_id:
+            continue
+        if not precio or precio == "Precio no disponible":
+            continue
+        if not tarjeta.get("imagen_url"):
+            continue
+
+        tarjeta["item_id"] = item_id
+        tarjeta["precio"] = precio
+        tarjeta["url_original"] = _url_exacta_con_item(url, item_id)
+
+        # Dedupe por publicación exacta, no por catálogo.
+        if item_id not in encontrados:
+            encontrados[item_id] = tarjeta
 
     productos = list(encontrados.values())
-    productos.sort(key=lambda producto: producto["_puntos"], reverse=True)
+    print("Productos exactos emparejados:", len(productos))
 
-    print("Productos encontrados:", len(productos))
-
-    # Para evitar precio/link distintos, solo usamos tarjetas cuyo link conserva
-    # la publicación exacta (item_id) o ya es una URL MLA-... concreta.
-    exactos = [
-        p for p in productos
-        if (
-            tiene_publicacion_exacta(p.get("url_original", ""))
-            and p.get("imagen_url")
-            and p.get("precio") not in ("", "Precio no disponible")
-            and p.get("nombre") != "Producto Mercado Libre"
-        )
-    ]
-
-    print("Productos con link exacto + foto + precio actual:", len(exactos))
-
-    # Nunca completamos con un catálogo genérico, porque eso puede hacer que
-    # el link abra otra oferta con otro precio. Si hubiera menos de 10 enlaces
-    # exactos, se publica una tanda más corta antes que publicar datos erróneos.
-    if not exactos:
+    if len(productos) < CANTIDAD_PRODUCTOS:
         raise RuntimeError(
-            "Mercado Libre no expuso ningún link de publicación exacta en esta ejecución. "
-            "Se detiene sin generar una tanda incorrecta."
+            f"Solo se pudieron emparejar {len(productos)} publicaciones exactas. "
+            "Se cancela la tanda para no publicar precio, imagen o link incorrectos."
         )
 
-    cantidad = min(CANTIDAD_PRODUCTOS, len(exactos))
-    pool = exactos[:40]
-    seleccionados = random.sample(pool, cantidad)
-
-    if cantidad < CANTIDAD_PRODUCTOS:
-        print(
-            f"ADVERTENCIA: se generarán {cantidad} productos exactos en vez de 10 "
-            "para no mezclar precios con catálogos genéricos."
-        )
+    random.shuffle(productos)
+    seleccionados = productos[:CANTIDAD_PRODUCTOS]
 
     resultado = []
     for numero, producto in enumerate(seleccionados, start=1):
         print(
-            f"ACEPTADO {numero}. {producto['nombre']} | "
-            f"precio={producto['precio']} | "
-            f"link_exacto={tiene_publicacion_exacta(producto['url_original'])} | "
+            f"ACEPTADO {numero}. item={producto['item_id']} | "
+            f"{producto['nombre']} | precio={producto['precio']} | "
             f"url={producto['url_original']}"
         )
 
+        # Solo agrega textos laterales. Esta función no cambia precio, link ni foto.
         producto = enriquecer_solo_textos_reales(producto)
         resultado.append(producto)
 
