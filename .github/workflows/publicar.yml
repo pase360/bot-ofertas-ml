@@ -41,7 +41,7 @@ jobs:
         run: |
           python main.py
 
-      - name: Guardar tanda, datos e imágenes en GitHub
+      - name: Guardar tanda, datos, imágenes e historial en GitHub
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -49,12 +49,13 @@ jobs:
           git add ultima_tanda.txt
           git add datos_tanda.txt
           git add imagenes_tanda.txt
+          git add historial_publicados.txt
           git add -A ofertas/
 
           if git diff --cached --quiet; then
             echo "No hay cambios para guardar"
           else
-            git commit -m "Actualizar tanda de ofertas"
+            git commit -m "Actualizar tanda de ofertas e historial"
             git pull --rebase origin main
             git push origin main
           fi
