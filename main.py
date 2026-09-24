@@ -433,8 +433,9 @@ def extraer_importes_texto(texto):
 
 
 def _es_precio_anterior_tarjeta(elemento):
+    """Devuelve True solo si el importe pertenece al precio viejo/tachado."""
     nodo = elemento
-    for _ in range(6):
+    for _ in range(7):
         if nodo is None or not isinstance(nodo, Tag):
             break
 
@@ -458,51 +459,88 @@ def _es_precio_anterior_tarjeta(elemento):
         ):
             return True
 
+        # Mercado Libre suele envolver el precio viejo en <s>.
+        if getattr(nodo, "name", "") == "s":
+            return True
+
         nodo = nodo.parent
 
     return False
 
 
-def _precios_actuales_tarjeta(contenedor, selector):
-    encontrados = []
+def _es_precio_secundario_tarjeta(elemento):
+    """Evita cuotas, precio por unidad, cupones u otros importes auxiliares."""
+    nodo = elemento
+    for _ in range(6):
+        if nodo is None or not isinstance(nodo, Tag):
+            break
 
-    try:
-        nodos = contenedor.select(selector)
-    except Exception:
-        nodos = []
+        clases = " ".join(nodo.get("class", []))
+        attrs = " ".join(
+            str(nodo.get(k, ""))
+            for k in ("id", "data-testid", "aria-label")
+        )
+        inferior = (clases + " " + attrs).lower()
 
+        if any(
+            marca in inferior
+            for marca in (
+                "installment",
+                "installments",
+                "financing",
+                "unit-price",
+                "price-per-unit",
+                "coupon",
+                "rebate",
+            )
+        ):
+            return True
+
+        nodo = nodo.parent
+
+    return False
+
+
+def _primer_precio_valido_en(nodos, precio_anterior=""):
+    """Toma el primer precio de venta real en orden DOM, sin exigir unicidad."""
     for nodo in nodos:
         if _es_precio_anterior_tarjeta(nodo):
             continue
+        if _es_precio_secundario_tarjeta(nodo):
+            continue
 
         valor = leer_money_amount(nodo)
-        if valor and valor not in encontrados:
-            encontrados.append(valor)
+        if not valor:
+            continue
+        if precio_anterior and valor == precio_anterior:
+            continue
 
-    return encontrados
+        return valor
+
+    return ""
 
 
 def obtener_precios(contenedor, texto, descuento):
     """
-    Obtiene el precio ACTUAL de la MISMA tarjeta de Más vendidos.
+    Obtiene el precio ACTUAL de la misma tarjeta de Más vendidos.
 
-    Reglas de seguridad:
-    - nunca usa el precio tachado/original;
-    - nunca toma importes del texto libre;
-    - nunca supone que el segundo importe es el actual;
-    - si hay más de un precio actual distinto y no puede resolverlo,
-      marca el producto como no verificable para descartarlo.
+    La clave es NO exigir que exista un único money-amount en toda la tarjeta:
+    Mercado Libre puede renderizar otros importes auxiliares. Se usa primero
+    el bloque semántico .poly-price__current, que es el precio de venta actual.
     """
     precio_anterior = ""
 
-    # Solo para conservar el dato informativo de precio anterior.
-    for selector in (
+    # Precio anterior/tachado, solo como referencia; nunca se usa como actual.
+    selectores_anteriores = (
+        "s.andes-money-amount--previous",
         ".andes-money-amount--previous",
         ".poly-price__original .andes-money-amount",
         ".ui-search-price__original-value .andes-money-amount",
         "[class*='original'] .andes-money-amount",
         "[class*='previous'] .andes-money-amount",
-    ):
+    )
+
+    for selector in selectores_anteriores:
         try:
             nodos = contenedor.select(selector)
         except Exception:
@@ -516,35 +554,53 @@ def obtener_precios(contenedor, texto, descuento):
         if precio_anterior:
             break
 
-    # Selectores del precio de venta ACTUAL, de más específico a más general.
+    # 1) Selector oficial/estable de las tarjetas poly actuales.
+    try:
+        nodos = contenedor.select(".poly-price__current .andes-money-amount")
+    except Exception:
+        nodos = []
+
+    precio = _primer_precio_valido_en(nodos, precio_anterior)
+    if precio:
+        return precio, precio_anterior
+
+    # 2) Variantes de layout vistas en Mercado Libre.
     selectores_actuales = (
-        ".poly-price__current .andes-money-amount",
-        ".poly-component__price .andes-money-amount",
         ".ui-search-price__second-line .andes-money-amount",
         "[data-testid='price-part'] .andes-money-amount",
         "[class*='current'] .andes-money-amount",
     )
 
     for selector in selectores_actuales:
-        valores = _precios_actuales_tarjeta(contenedor, selector)
+        try:
+            nodos = contenedor.select(selector)
+        except Exception:
+            nodos = []
 
-        if len(valores) == 1:
-            return valores[0], precio_anterior
+        precio = _primer_precio_valido_en(nodos, precio_anterior)
+        if precio:
+            return precio, precio_anterior
 
-        if len(valores) > 1:
-            # No elegir uno arbitrariamente.
-            print("PRECIO AMBIGUO EN TARJETA:", valores)
-            return "Precio no disponible", precio_anterior
+    # 3) Respaldo dentro del componente de precio de ESA MISMA tarjeta.
+    try:
+        nodos = contenedor.select(".poly-component__price .andes-money-amount")
+    except Exception:
+        nodos = []
 
-    # Último respaldo: cualquier money-amount de ESTA tarjeta, excluyendo
-    # expresamente los precios anteriores. Debe quedar un único valor.
-    valores = _precios_actuales_tarjeta(contenedor, ".andes-money-amount")
+    precio = _primer_precio_valido_en(nodos, precio_anterior)
+    if precio:
+        return precio, precio_anterior
 
-    if len(valores) == 1:
-        return valores[0], precio_anterior
+    # 4) Último respaldo: primer money-amount que no sea viejo ni secundario.
+    # Sigue limitado a la tarjeta exacta del producto, no al texto libre.
+    try:
+        nodos = contenedor.select(".andes-money-amount")
+    except Exception:
+        nodos = []
 
-    if len(valores) > 1:
-        print("PRECIO AMBIGUO EN TARJETA (respaldo):", valores)
+    precio = _primer_precio_valido_en(nodos, precio_anterior)
+    if precio:
+        return precio, precio_anterior
 
     return "Precio no disponible", precio_anterior
 
