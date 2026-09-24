@@ -1,0 +1,39 @@
+name: Obtener Token Mercado Libre
+
+on:
+  workflow_dispatch:
+
+jobs:
+  obtener-token:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Intercambiar codigo por token
+        env:
+          CLIENT_ID: ${{ secrets.MELI_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.MELI_CLIENT_SECRET }}
+          AUTH_CODE: ${{ secrets.MELI_AUTH_CODE }}
+        run: |
+          curl -s -X POST "https://api.mercadolibre.com/oauth/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=authorization_code" \
+            -d "client_id=$CLIENT_ID" \
+            -d "client_secret=$CLIENT_SECRET" \
+            -d "code=$AUTH_CODE" \
+            -d "redirect_uri=https://www.google.com" \
+            -o token.json
+
+          python - <<'PY'
+          import json
+          data = json.load(open("token.json"))
+
+          if "access_token" not in data:
+              print("ERROR DE MERCADO LIBRE:")
+              print(data)
+              raise SystemExit(1)
+
+          print("TOKEN OBTENIDO CORRECTAMENTE")
+          print("ACCESS_TOKEN=" + data["access_token"])
+          if data.get("refresh_token"):
+              print("REFRESH_TOKEN=" + data["refresh_token"])
+          PY
