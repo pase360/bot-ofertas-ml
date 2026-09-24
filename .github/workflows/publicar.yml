@@ -92,11 +92,29 @@ jobs:
           print("Token de Mercado Libre renovado correctamente")
           PY
 
+      # IMPORTANTE:
+      # Guarda el refresh token NUEVO antes de ejecutar main.py.
+      # Así no se pierde aunque después falle el bot.
+      - name: Guardar inmediatamente token renovado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add meli_refresh_token.enc
+
+          if git diff --cached --quiet; then
+            echo "El token cifrado no tuvo cambios"
+          else
+            git commit -m "Actualizar token cifrado de Mercado Libre"
+            git pull --rebase origin main
+            git push origin main
+          fi
+
       - name: Ejecutar Bot de Ofertas
         run: |
           python main.py
 
-      - name: Guardar tanda, datos, imágenes, historial y token cifrado
+      - name: Guardar tanda, datos, imágenes e historial
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -105,7 +123,6 @@ jobs:
           git add datos_tanda.txt
           git add imagenes_tanda.txt
           git add historial_publicados.txt
-          git add meli_refresh_token.enc
           git add -A ofertas/
 
           if git diff --cached --quiet; then
