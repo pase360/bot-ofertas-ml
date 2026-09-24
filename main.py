@@ -1429,23 +1429,26 @@ def guardar_historial_publicados(productos):
     print("✅ historial_publicados.txt actualizado:", len(ids), "IDs")
 
 
-def _es_url_mas_vendidos_general(url):
-    """Acepta solo la sección general de Más vendidos, sin categorías."""
+def _es_url_mas_vendidos(url):
+    """Acepta la portada general y categorías que cuelgan de /mas-vendidos/."""
     try:
         partes = urlsplit(url)
-        path = partes.path.rstrip("/").lower()
-        return (
-            "mercadolibre.com.ar" in partes.netloc.lower()
-            and path == "/mas-vendidos"
+        if "mercadolibre.com.ar" not in partes.netloc.lower():
+            return False
+        path = partes.path.rstrip("/")
+        return bool(
+            path.lower() == "/mas-vendidos"
+            or re.fullmatch(r"/mas-vendidos/MLA\d+", path, re.IGNORECASE)
         )
     except Exception:
         return False
 
 
-def _urls_mas_vendidos_misma_seccion(soup, base_url):
+def _urls_categorias_desde_mas_vendidos_general(soup, base_url):
     """
-    Busca enlaces de continuación/paginación de la MISMA sección general
-    de Más vendidos. Nunca entra en /mas-vendidos/MLA... (categorías).
+    Toma únicamente categorías que Mercado Libre enlaza desde su propia
+    portada general de Más Vendidos. No inventa categorías ni usa búsquedas
+    externas.
     """
     urls = []
     vistos = set()
@@ -1454,13 +1457,21 @@ def _urls_mas_vendidos_misma_seccion(soup, base_url):
         href = limpiar_url(enlace.get("href"))
         if not href:
             continue
+
         absoluta = urljoin(base_url, href)
-        if not _es_url_mas_vendidos_general(absoluta):
+        try:
+            partes = urlsplit(absoluta)
+            path = partes.path.rstrip("/")
+        except Exception:
             continue
 
-        partes = urlsplit(absoluta)
-        limpia = urlunsplit((partes.scheme or "https", partes.netloc, partes.path, partes.query, ""))
-        if limpia != base_url and limpia not in vistos:
+        if "mercadolibre.com.ar" not in partes.netloc.lower():
+            continue
+        if not re.fullmatch(r"/mas-vendidos/MLA\d+", path, re.IGNORECASE):
+            continue
+
+        limpia = urlunsplit(("https", partes.netloc, path, "", ""))
+        if limpia not in vistos:
             vistos.add(limpia)
             urls.append(limpia)
 
@@ -1468,7 +1479,10 @@ def _urls_mas_vendidos_misma_seccion(soup, base_url):
 
 
 def _extraer_productos_de_mas_vendidos(url_pagina):
-    """Extrae publicaciones exactas de la sección general de Más vendidos."""
+    """
+    Extrae solo publicaciones cuyo item_id, precio, imagen y enlace pueden
+    emparejarse dentro de la misma página de Más Vendidos.
+    """
     response = safe_get(url_pagina, timeout=30)
     print("HTTP Más vendidos:", response.status_code, "|", url_pagina)
     soup = BeautifulSoup(response.text, "html.parser")
@@ -1476,6 +1490,7 @@ def _extraer_productos_de_mas_vendidos(url_pagina):
     print("Resultados embebidos con item_id + precio:", len(resultados_embebidos))
 
     encontrados = {}
+
     for enlace in soup.find_all("a", href=True):
         url = limpiar_url(enlace.get("href"))
         if not es_producto(url) or "mas-vendidos" in url:
@@ -1512,37 +1527,47 @@ def _extraer_productos_de_mas_vendidos(url_pagina):
         tarjeta["url_original"] = _url_exacta_con_item(url, item_id)
         encontrados.setdefault(item_id, tarjeta)
 
-    return encontrados, _urls_mas_vendidos_misma_seccion(soup, url_pagina)
+    return encontrados, soup
 
 
 def obtener_productos():
-    print("--- DESCARGANDO MÁS VENDIDOS GENERAL ---")
+    print("--- DESCARGANDO MÁS VENDIDOS ---")
 
     historial = cargar_historial_publicados()
     print("Publicaciones ya usadas en el historial:", len(historial))
 
-    # IMPORTANTE: solo la sección general /mas-vendidos.
-    # Si Mercado Libre expone enlaces de continuación/paginación de esa misma
-    # sección, se recorren. No se entra en categorías /mas-vendidos/MLA....
-    pendientes = deque([URL_MAS_VENDIDOS])
-    paginas_vistas = set()
+    # 1) Siempre se parte de la portada oficial general de Más Vendidos.
+    # 2) De esa misma portada se toman las categorías que Mercado Libre muestra.
+    # 3) Se recorren esas categorías hasta reunir 10 publicaciones NUEVAS.
+    # 4) Cada producto mantiene los controles de item_id + precio + imagen + link.
     encontrados_nuevos = {}
-    MAX_PAGINAS = 50
 
-    while pendientes and len(paginas_vistas) < MAX_PAGINAS:
-        url_pagina = pendientes.popleft()
-        if url_pagina in paginas_vistas:
-            continue
-        if not _es_url_mas_vendidos_general(url_pagina):
-            continue
+    encontrados_general, soup_general = _extraer_productos_de_mas_vendidos(URL_MAS_VENDIDOS)
+    for item_id, tarjeta in encontrados_general.items():
+        if item_id not in historial:
+            encontrados_nuevos.setdefault(item_id, tarjeta)
 
-        paginas_vistas.add(url_pagina)
+    print("Nuevos únicos tras portada general:", len(encontrados_nuevos))
+
+    categorias = _urls_categorias_desde_mas_vendidos_general(soup_general, URL_MAS_VENDIDOS)
+    print("Categorías de Más Vendidos detectadas en la portada:", len(categorias))
+
+    # Mezclar el orden evita publicar siempre las mismas primeras categorías,
+    # pero las categorías siguen siendo exclusivamente las ofrecidas por ML.
+    random.shuffle(categorias)
+
+    paginas_revisadas = 1
+    for url_categoria in categorias:
+        if len(encontrados_nuevos) >= CANTIDAD_PRODUCTOS:
+            break
 
         try:
-            encontrados, continuaciones = _extraer_productos_de_mas_vendidos(url_pagina)
+            encontrados, _ = _extraer_productos_de_mas_vendidos(url_categoria)
         except Exception as e:
-            print("AVISO: no se pudo leer", url_pagina, "|", e)
+            print("AVISO: no se pudo leer", url_categoria, "|", e)
             continue
+
+        paginas_revisadas += 1
 
         for item_id, tarjeta in encontrados.items():
             if item_id in historial:
@@ -1551,25 +1576,18 @@ def obtener_productos():
 
         print(
             "Nuevos únicos acumulados:", len(encontrados_nuevos),
-            "| páginas de la misma sección revisadas:", len(paginas_vistas)
+            "| páginas de Más Vendidos revisadas:", paginas_revisadas
         )
-
-        if len(encontrados_nuevos) >= CANTIDAD_PRODUCTOS:
-            break
-
-        for nueva_url in continuaciones:
-            if nueva_url not in paginas_vistas and nueva_url not in pendientes:
-                pendientes.append(nueva_url)
 
     productos = list(encontrados_nuevos.values())
     print("Productos nuevos disponibles:", len(productos))
 
     if len(productos) < CANTIDAD_PRODUCTOS:
         raise RuntimeError(
-            f"La sección general de Más vendidos expuso solo {len(productos)} "
-            f"publicaciones nuevas válidas después de revisar {len(paginas_vistas)} página(s). "
-            f"Se necesitan {CANTIDAD_PRODUCTOS}. Se cancela la tanda para no repetir "
-            "ni mezclar categorías o productos con precio/link no verificados."
+            f"Mercado Libre expuso solo {len(productos)} publicaciones nuevas válidas "
+            f"después de revisar la portada y {max(0, paginas_revisadas - 1)} categoría(s) "
+            f"de Más Vendidos. Se necesitan {CANTIDAD_PRODUCTOS}. Se cancela la tanda "
+            "antes de repetir o usar productos con precio/link no verificados."
         )
 
     random.shuffle(productos)
