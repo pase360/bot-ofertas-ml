@@ -1429,33 +1429,51 @@ def guardar_historial_publicados(productos):
     print("✅ historial_publicados.txt actualizado:", len(ids), "IDs")
 
 
-def _urls_mas_vendidos_de_pagina(soup, base_url):
-    """Descubre páginas/categorías de Más vendidos sin salir de Mercado Libre."""
+def _es_url_mas_vendidos_general(url):
+    """Acepta solo la sección general de Más vendidos, sin categorías."""
+    try:
+        partes = urlsplit(url)
+        path = partes.path.rstrip("/").lower()
+        return (
+            "mercadolibre.com.ar" in partes.netloc.lower()
+            and path == "/mas-vendidos"
+        )
+    except Exception:
+        return False
+
+
+def _urls_mas_vendidos_misma_seccion(soup, base_url):
+    """
+    Busca enlaces de continuación/paginación de la MISMA sección general
+    de Más vendidos. Nunca entra en /mas-vendidos/MLA... (categorías).
+    """
     urls = []
     vistos = set()
+
     for enlace in soup.find_all("a", href=True):
         href = limpiar_url(enlace.get("href"))
         if not href:
             continue
         absoluta = urljoin(base_url, href)
+        if not _es_url_mas_vendidos_general(absoluta):
+            continue
+
         partes = urlsplit(absoluta)
-        if "mercadolibre.com.ar" not in partes.netloc.lower():
-            continue
-        if "mas-vendidos" not in partes.path.lower():
-            continue
         limpia = urlunsplit((partes.scheme or "https", partes.netloc, partes.path, partes.query, ""))
-        if limpia not in vistos:
+        if limpia != base_url and limpia not in vistos:
             vistos.add(limpia)
             urls.append(limpia)
+
     return urls
 
 
 def _extraer_productos_de_mas_vendidos(url_pagina):
-    """Extrae publicaciones exactas de una página de Más vendidos."""
+    """Extrae publicaciones exactas de la sección general de Más vendidos."""
     response = safe_get(url_pagina, timeout=30)
     print("HTTP Más vendidos:", response.status_code, "|", url_pagina)
     soup = BeautifulSoup(response.text, "html.parser")
     resultados_embebidos = extraer_resultados_embebidos(soup)
+    print("Resultados embebidos con item_id + precio:", len(resultados_embebidos))
 
     encontrados = {}
     for enlace in soup.find_all("a", href=True):
@@ -1494,30 +1512,34 @@ def _extraer_productos_de_mas_vendidos(url_pagina):
         tarjeta["url_original"] = _url_exacta_con_item(url, item_id)
         encontrados.setdefault(item_id, tarjeta)
 
-    return encontrados, _urls_mas_vendidos_de_pagina(soup, url_pagina)
+    return encontrados, _urls_mas_vendidos_misma_seccion(soup, url_pagina)
 
 
 def obtener_productos():
-    print("--- DESCARGANDO MÁS VENDIDOS ---")
+    print("--- DESCARGANDO MÁS VENDIDOS GENERAL ---")
 
     historial = cargar_historial_publicados()
     print("Publicaciones ya usadas en el historial:", len(historial))
 
-    # Empieza por la portada y luego recorre categorías de Más vendidos.
-    # Así no depende de las ~11 publicaciones que aparecen en una sola página.
+    # IMPORTANTE: solo la sección general /mas-vendidos.
+    # Si Mercado Libre expone enlaces de continuación/paginación de esa misma
+    # sección, se recorren. No se entra en categorías /mas-vendidos/MLA....
     pendientes = deque([URL_MAS_VENDIDOS])
     paginas_vistas = set()
     encontrados_nuevos = {}
-    MAX_PAGINAS = 40
+    MAX_PAGINAS = 50
 
     while pendientes and len(paginas_vistas) < MAX_PAGINAS:
         url_pagina = pendientes.popleft()
         if url_pagina in paginas_vistas:
             continue
+        if not _es_url_mas_vendidos_general(url_pagina):
+            continue
+
         paginas_vistas.add(url_pagina)
 
         try:
-            encontrados, nuevas_paginas = _extraer_productos_de_mas_vendidos(url_pagina)
+            encontrados, continuaciones = _extraer_productos_de_mas_vendidos(url_pagina)
         except Exception as e:
             print("AVISO: no se pudo leer", url_pagina, "|", e)
             continue
@@ -1529,13 +1551,13 @@ def obtener_productos():
 
         print(
             "Nuevos únicos acumulados:", len(encontrados_nuevos),
-            "| páginas revisadas:", len(paginas_vistas)
+            "| páginas de la misma sección revisadas:", len(paginas_vistas)
         )
 
         if len(encontrados_nuevos) >= CANTIDAD_PRODUCTOS:
             break
 
-        for nueva_url in nuevas_paginas:
+        for nueva_url in continuaciones:
             if nueva_url not in paginas_vistas and nueva_url not in pendientes:
                 pendientes.append(nueva_url)
 
@@ -1544,9 +1566,10 @@ def obtener_productos():
 
     if len(productos) < CANTIDAD_PRODUCTOS:
         raise RuntimeError(
-            f"Solo se encontraron {len(productos)} publicaciones nuevas después de revisar "
-            f"{len(paginas_vistas)} páginas de Más vendidos. Se necesitan {CANTIDAD_PRODUCTOS}. "
-            "Se cancela la tanda para no repetir productos ya usados."
+            f"La sección general de Más vendidos expuso solo {len(productos)} "
+            f"publicaciones nuevas válidas después de revisar {len(paginas_vistas)} página(s). "
+            f"Se necesitan {CANTIDAD_PRODUCTOS}. Se cancela la tanda para no repetir "
+            "ni mezclar categorías o productos con precio/link no verificados."
         )
 
     random.shuffle(productos)
