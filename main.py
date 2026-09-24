@@ -128,7 +128,12 @@ def nombre_desde_url(url):
 
 
 def safe_get(url, timeout=30):
-    response = requests.get(url, headers=HEADERS, timeout=timeout)
+    headers = dict(HEADERS)
+    headers.update({
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    })
+    response = requests.get(url, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response
 
@@ -648,10 +653,124 @@ def _formatear_precio(numero):
     return "$ " + f"{entero:,}".replace(",", ".") + f",{centavos:02d}"
 
 
-def precio_desde_json_ld(soup):
-    """Busca el precio ACTUAL estructurado del Product/Offer."""
-    if not soup:
+def _precio_nodo_money(elemento):
+    """Convierte un nodo .andes-money-amount en precio ARS normalizado."""
+    if not elemento:
         return ""
+
+    if _es_precio_anterior(elemento):
+        return ""
+
+    valor = leer_money_amount(elemento)
+    numero = _normalizar_numero_precio(valor)
+    if numero is None:
+        return ""
+
+    return _formatear_precio(numero)
+
+
+def _es_precio_anterior(elemento):
+    """
+    Detecta cualquier precio tachado/anterior recorriendo el propio nodo
+    y sus contenedores cercanos.
+    """
+    nodo = elemento
+    for _ in range(7):
+        if nodo is None or not isinstance(nodo, Tag):
+            break
+
+        clases = " ".join(nodo.get("class", []))
+        attrs = " ".join(
+            str(nodo.get(k, ""))
+            for k in ("id", "data-testid", "aria-label")
+        )
+        inferior = (clases + " " + attrs).lower()
+
+        if any(
+            x in inferior
+            for x in (
+                "previous",
+                "original",
+                "strikethrough",
+                "old-price",
+                "price-before",
+                "list-price",
+            )
+        ):
+            return True
+
+        nodo = nodo.parent
+
+    return False
+
+
+def _precios_unicos(valores):
+    resultado = []
+    for valor in valores:
+        if valor and valor not in resultado:
+            resultado.append(valor)
+    return resultado
+
+
+def precios_desde_dom_actual(soup):
+    """
+    Extrae SOLO el precio visible actual del bloque principal de la PDP.
+
+    No mira precios anteriores, recomendaciones, cuotas ni texto libre.
+    Devuelve una lista porque si aparecen dos precios distintos en el bloque
+    principal se considera ambiguo y el producto se descarta.
+    """
+    if not soup:
+        return []
+
+    selectores = [
+        # Bloque superior principal: máxima prioridad.
+        ".ui-pdp-container__top-wrapper .ui-pdp-price__second-line .andes-money-amount",
+        ".ui-pdp-container__col--right .ui-pdp-price__second-line .andes-money-amount",
+        "main .ui-pdp-price__second-line .andes-money-amount",
+        # Respaldo todavía limitado al bloque de precio de la PDP.
+        ".ui-pdp-price__second-line .andes-money-amount",
+        "[data-testid='price-part'] .andes-money-amount",
+    ]
+
+    for selector in selectores:
+        try:
+            nodos = soup.select(selector)
+        except Exception:
+            nodos = []
+
+        encontrados = []
+        for nodo in nodos:
+            precio = _precio_nodo_money(nodo)
+            if precio:
+                encontrados.append(precio)
+
+        encontrados = _precios_unicos(encontrados)
+
+        # Si este selector encontró un único valor, es el precio visible actual.
+        if len(encontrados) == 1:
+            return encontrados
+
+        # Si encontró más de uno distinto, NO elegimos "el primero".
+        # Eso evita tomar cuotas, otra oferta o un precio de vendedor distinto.
+        if len(encontrados) > 1:
+            return encontrados
+
+    return []
+
+
+def precios_desde_json_ld_actual(soup):
+    """
+    Respaldo estructurado estricto.
+
+    IMPORTANTE: usa únicamente la clave `price`.
+    Nunca usa `lowPrice`, porque en páginas de catálogo puede ser el precio
+    mínimo de otra oferta y no el que ve el comprador en la publicación.
+    """
+    if not soup:
+        return []
+
+    encontrados = []
 
     for item in extraer_json_ld(soup):
         for nodo in _iterar_json(item):
@@ -659,40 +778,41 @@ def precio_desde_json_ld(soup):
             tipos = tipo if isinstance(tipo, list) else [tipo]
             tipos = [str(x).lower() for x in tipos if x]
 
-            # Product -> offers
             if "product" in tipos:
                 offers = nodo.get("offers")
                 if isinstance(offers, dict):
                     offers = [offers]
+
                 if isinstance(offers, list):
                     for offer in offers:
                         if not isinstance(offer, dict):
                             continue
-                        for clave in ("price", "lowPrice"):
-                            numero = _normalizar_numero_precio(offer.get(clave))
-                            if numero is not None:
-                                return _formatear_precio(numero)
+                        numero = _normalizar_numero_precio(offer.get("price"))
+                        if numero is not None:
+                            encontrados.append(_formatear_precio(numero))
 
-            # Offer directo
-            if "offer" in tipos or "aggregateoffer" in tipos:
-                for clave in ("price", "lowPrice"):
-                    numero = _normalizar_numero_precio(nodo.get(clave))
-                    if numero is not None:
-                        return _formatear_precio(numero)
+            if "offer" in tipos:
+                numero = _normalizar_numero_precio(nodo.get("price"))
+                if numero is not None:
+                    encontrados.append(_formatear_precio(numero))
 
-    return ""
+    return _precios_unicos(encontrados)
 
 
-def precio_desde_meta(soup):
+def precios_desde_meta_actual(soup):
+    """
+    Segundo respaldo estructurado. No usa OG genérico ni texto libre.
+    """
     if not soup:
-        return ""
+        return []
 
     selectores = [
         "meta[itemprop='price'][content]",
         "meta[property='product:price:amount'][content]",
-        "meta[property='og:price:amount'][content]",
         "[itemprop='price'][content]",
     ]
+
+    encontrados = []
 
     for selector in selectores:
         try:
@@ -703,68 +823,57 @@ def precio_desde_meta(soup):
         for nodo in nodos:
             numero = _normalizar_numero_precio(nodo.get("content"))
             if numero is not None:
-                return _formatear_precio(numero)
+                encontrados.append(_formatear_precio(numero))
 
-    return ""
-
-
-def _es_precio_anterior(elemento):
-    nodo = elemento
-    for _ in range(5):
-        if nodo is None or not isinstance(nodo, Tag):
-            break
-        clases = " ".join(nodo.get("class", []))
-        inferior = clases.lower()
-        if any(x in inferior for x in ("previous", "original", "strikethrough")):
-            return True
-        nodo = nodo.parent
-    return False
-
-
-def precio_desde_dom_actual(soup):
-    """Último respaldo: solo nodos de precio actual, nunca previous/original."""
-    if not soup:
-        return ""
-
-    selectores = [
-        ".ui-pdp-price__second-line .andes-money-amount",
-        ".ui-pdp-price__main-container .andes-money-amount",
-        "[data-testid='price-part'] .andes-money-amount",
-    ]
-
-    for selector in selectores:
-        try:
-            nodos = soup.select(selector)
-        except Exception:
-            nodos = []
-
-        for nodo in nodos:
-            if _es_precio_anterior(nodo):
-                continue
-            valor = leer_money_amount(nodo)
-            numero = _normalizar_numero_precio(valor)
-            if numero is not None:
-                return _formatear_precio(numero)
-
-    return ""
+    return _precios_unicos(encontrados)
 
 
 def obtener_precio_actual_verificado(soup):
     """
-    Devuelve SOLO un precio actual verificable.
-    No usa el primer número del texto de la página y no aproxima.
+    Devuelve el precio actual solo cuando puede verificarse sin ambigüedad.
+
+    Orden:
+    1) precio visible ACTUAL en el bloque principal de la publicación;
+    2) si no está en el HTML visible, JSON-LD y meta deben coincidir exactamente.
+
+    Nunca:
+    - toma el precio tachado/anterior;
+    - usa lowPrice de AggregateOffer;
+    - usa el primer importe encontrado en todo el texto;
+    - aproxima un precio.
     """
-    for extractor in (
-        precio_desde_json_ld,
-        precio_desde_meta,
-        precio_desde_dom_actual,
-    ):
-        precio = extractor(soup)
-        if precio:
-            return precio
+    dom = precios_desde_dom_actual(soup)
 
+    if len(dom) == 1:
+        print("PRECIO VERIFICADO DOM:", dom[0])
+        return dom[0]
+
+    if len(dom) > 1:
+        print("PRECIO AMBIGUO EN DOM, se descarta:", dom)
+        return ""
+
+    json_precios = precios_desde_json_ld_actual(soup)
+    meta_precios = precios_desde_meta_actual(soup)
+
+    if len(json_precios) == 1 and len(meta_precios) == 1:
+        if json_precios[0] == meta_precios[0]:
+            print("PRECIO VERIFICADO ESTRUCTURADO:", json_precios[0])
+            return json_precios[0]
+
+        print(
+            "PRECIO ESTRUCTURADO NO COINCIDE, se descarta:",
+            json_precios,
+            meta_precios,
+        )
+        return ""
+
+    print(
+        "PRECIO NO VERIFICABLE, se descarta. JSON:",
+        json_precios,
+        "META:",
+        meta_precios,
+    )
     return ""
-
 
 def es_texto_util_atributo(texto, nombre_producto=""):
     texto = limpiar_texto(texto)
