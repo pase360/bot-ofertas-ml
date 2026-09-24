@@ -584,6 +584,188 @@ def extraer_json_ld(soup):
     return encontrados
 
 
+# =========================================================
+# PRECIO ACTUAL VERIFICADO DE LA PUBLICACIÓN INDIVIDUAL
+# =========================================================
+
+def _iterar_json(obj):
+    if isinstance(obj, dict):
+        yield obj
+        for valor in obj.values():
+            yield from _iterar_json(valor)
+    elif isinstance(obj, list):
+        for item in obj:
+            yield from _iterar_json(item)
+
+
+def _normalizar_numero_precio(valor):
+    if valor is None:
+        return None
+
+    if isinstance(valor, (int, float)):
+        return float(valor)
+
+    texto = limpiar_texto(valor)
+    if not texto:
+        return None
+
+    texto = texto.replace("$", "").replace(" ", "")
+
+    # AR: 44.155,50 -> 44155.50
+    if "," in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+    else:
+        # si solo hay puntos y el último grupo tiene 3 dígitos,
+        # se consideran separadores de miles
+        partes = texto.split(".")
+        if len(partes) > 1 and all(p.isdigit() for p in partes):
+            if len(partes[-1]) == 3:
+                texto = "".join(partes)
+
+    texto = re.sub(r"[^0-9.]", "", texto)
+
+    try:
+        numero = float(texto)
+    except Exception:
+        return None
+
+    if numero <= 0:
+        return None
+
+    return numero
+
+
+def _formatear_precio(numero):
+    if numero is None:
+        return ""
+
+    if abs(numero - round(numero)) < 0.001:
+        entero = int(round(numero))
+        return "$ " + f"{entero:,}".replace(",", ".")
+
+    entero = int(numero)
+    centavos = int(round((numero - entero) * 100))
+    return "$ " + f"{entero:,}".replace(",", ".") + f",{centavos:02d}"
+
+
+def precio_desde_json_ld(soup):
+    """Busca el precio ACTUAL estructurado del Product/Offer."""
+    if not soup:
+        return ""
+
+    for item in extraer_json_ld(soup):
+        for nodo in _iterar_json(item):
+            tipo = nodo.get("@type")
+            tipos = tipo if isinstance(tipo, list) else [tipo]
+            tipos = [str(x).lower() for x in tipos if x]
+
+            # Product -> offers
+            if "product" in tipos:
+                offers = nodo.get("offers")
+                if isinstance(offers, dict):
+                    offers = [offers]
+                if isinstance(offers, list):
+                    for offer in offers:
+                        if not isinstance(offer, dict):
+                            continue
+                        for clave in ("price", "lowPrice"):
+                            numero = _normalizar_numero_precio(offer.get(clave))
+                            if numero is not None:
+                                return _formatear_precio(numero)
+
+            # Offer directo
+            if "offer" in tipos or "aggregateoffer" in tipos:
+                for clave in ("price", "lowPrice"):
+                    numero = _normalizar_numero_precio(nodo.get(clave))
+                    if numero is not None:
+                        return _formatear_precio(numero)
+
+    return ""
+
+
+def precio_desde_meta(soup):
+    if not soup:
+        return ""
+
+    selectores = [
+        "meta[itemprop='price'][content]",
+        "meta[property='product:price:amount'][content]",
+        "meta[property='og:price:amount'][content]",
+        "[itemprop='price'][content]",
+    ]
+
+    for selector in selectores:
+        try:
+            nodos = soup.select(selector)
+        except Exception:
+            nodos = []
+
+        for nodo in nodos:
+            numero = _normalizar_numero_precio(nodo.get("content"))
+            if numero is not None:
+                return _formatear_precio(numero)
+
+    return ""
+
+
+def _es_precio_anterior(elemento):
+    nodo = elemento
+    for _ in range(5):
+        if nodo is None or not isinstance(nodo, Tag):
+            break
+        clases = " ".join(nodo.get("class", []))
+        inferior = clases.lower()
+        if any(x in inferior for x in ("previous", "original", "strikethrough")):
+            return True
+        nodo = nodo.parent
+    return False
+
+
+def precio_desde_dom_actual(soup):
+    """Último respaldo: solo nodos de precio actual, nunca previous/original."""
+    if not soup:
+        return ""
+
+    selectores = [
+        ".ui-pdp-price__second-line .andes-money-amount",
+        ".ui-pdp-price__main-container .andes-money-amount",
+        "[data-testid='price-part'] .andes-money-amount",
+    ]
+
+    for selector in selectores:
+        try:
+            nodos = soup.select(selector)
+        except Exception:
+            nodos = []
+
+        for nodo in nodos:
+            if _es_precio_anterior(nodo):
+                continue
+            valor = leer_money_amount(nodo)
+            numero = _normalizar_numero_precio(valor)
+            if numero is not None:
+                return _formatear_precio(numero)
+
+    return ""
+
+
+def obtener_precio_actual_verificado(soup):
+    """
+    Devuelve SOLO un precio actual verificable.
+    No usa el primer número del texto de la página y no aproxima.
+    """
+    for extractor in (
+        precio_desde_json_ld,
+        precio_desde_meta,
+        precio_desde_dom_actual,
+    ):
+        precio = extractor(soup)
+        if precio:
+            return precio
+
+    return ""
+
+
 def es_texto_util_atributo(texto, nombre_producto=""):
     texto = limpiar_texto(texto)
     if not texto:
@@ -800,25 +982,34 @@ def obtener_atributos_reales_publicacion(soup, titulo):
 
 def enriquecer_solo_textos_reales(datos):
     """
-    IMPORTANTE:
-    - Consulta la publicación individual SOLO para obtener textos reales.
-    - NO cambia imagen_url.
-    - NO cambia el producto por imágenes de la publicación.
-    - Conserva la foto correcta obtenida en Más vendidos.
+    Consulta la publicación individual para:
+    - obtener textos reales;
+    - verificar el PRECIO ACTUAL exacto.
+
+    La imagen SIEMPRE se conserva desde Más vendidos.
+    Si el precio actual no puede verificarse, el producto queda marcado
+    como no válido y NO se publica.
     """
     imagen_original = datos.get("imagen_url", "")
 
     soup, _ = extraer_publicacion(datos["url_original"])
+
+    datos["precio_verificado"] = False
 
     if soup:
         datos["atributos_visuales"] = obtener_atributos_reales_publicacion(
             soup,
             datos["nombre"],
         )
+
+        precio_actual = obtener_precio_actual_verificado(soup)
+        if precio_actual:
+            datos["precio"] = precio_actual
+            datos["precio_verificado"] = True
     else:
         datos["atributos_visuales"] = atributos_desde_titulo(datos["nombre"])
 
-    # Garantía: nunca reemplazar la foto del producto por un logo de la página.
+    # Garantía: jamás sustituir la foto por un logo/imagen de la página.
     datos["imagen_url"] = imagen_original
 
     return datos
@@ -854,10 +1045,10 @@ def obtener_productos():
         puntos = 0
         if datos["nombre"] != "Producto Mercado Libre":
             puntos += 5
-        if datos["precio"] != "Precio no disponible":
-            puntos += 6
         if datos["imagen_url"]:
-            puntos += 5
+            puntos += 6
+        if datos["precio"] != "Precio no disponible":
+            puntos += 1
         if datos["descuento"]:
             puntos += 1
         if datos["cuotas"]:
@@ -875,40 +1066,48 @@ def obtener_productos():
 
     print("Productos encontrados:", len(productos))
 
-    validos = [
+    # Para no publicar precios dudosos, la tarjeta de Más vendidos se usa
+    # solo para nombre/foto/candidato. El precio definitivo se valida en
+    # la publicación individual.
+    candidatos = [
         producto
         for producto in productos
         if (
-            producto["precio"] != "Precio no disponible"
-            and producto["imagen_url"]
+            producto["imagen_url"]
             and producto["nombre"] != "Producto Mercado Libre"
         )
-    ]
+    ][:60]
 
-    print("Productos con precio válido:", len(validos))
+    random.shuffle(candidatos)
 
-    candidatos = validos[:40] if len(validos) >= CANTIDAD_PRODUCTOS else productos[:40]
+    verificados = []
 
-    if len(candidatos) >= CANTIDAD_PRODUCTOS:
-        seleccionados = random.sample(candidatos, CANTIDAD_PRODUCTOS)
-    else:
-        seleccionados = candidatos
+    for numero, producto in enumerate(candidatos, start=1):
+        if len(verificados) >= CANTIDAD_PRODUCTOS:
+            break
 
-    enriquecidos = []
-
-    for numero, producto in enumerate(seleccionados, start=1):
-        print(f"Leyendo textos reales {numero}/{len(seleccionados)}...")
+        print(f"Verificando publicación {numero}/{len(candidatos)}...")
         producto = enriquecer_solo_textos_reales(producto)
-        enriquecidos.append(producto)
+
+        if not producto.get("precio_verificado"):
+            print("DESCARTADO: no se pudo verificar precio actual:", producto["url_original"])
+            continue
+
+        verificados.append(producto)
 
         print(
-            f"{numero}. {producto['nombre']} | "
-            f"{producto['precio']} | "
-            f"foto={producto['imagen_url'][:70]} | "
-            f"atributos={producto.get('atributos_visuales', [])}"
+            f"ACEPTADO {len(verificados)}. {producto['nombre']} | "
+            f"precio actual={producto['precio']} | "
+            f"foto={producto['imagen_url'][:70]}"
         )
 
-    return enriquecidos
+    if len(verificados) < CANTIDAD_PRODUCTOS:
+        raise RuntimeError(
+            f"Solo se pudieron verificar {len(verificados)} productos con precio actual exacto. "
+            "Se cancela la tanda para no publicar precios incorrectos."
+        )
+
+    return verificados
 
 
 # =========================================================
