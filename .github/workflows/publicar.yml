@@ -35,13 +35,68 @@ jobs:
       - name: Instalar librerías
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 pillow
+          pip install requests beautifulsoup4 pillow cryptography
+
+      - name: Renovar token de Mercado Libre
+        env:
+          MELI_CLIENT_ID: ${{ secrets.MELI_CLIENT_ID }}
+          MELI_CLIENT_SECRET: ${{ secrets.MELI_CLIENT_SECRET }}
+          MELI_REFRESH_TOKEN_INICIAL: ${{ secrets.MELI_REFRESH_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os
+          import base64
+          import hashlib
+          import requests
+          from cryptography.fernet import Fernet
+
+          client_id = os.environ["MELI_CLIENT_ID"]
+          client_secret = os.environ["MELI_CLIENT_SECRET"]
+
+          clave = base64.urlsafe_b64encode(
+              hashlib.sha256(client_secret.encode()).digest()
+          )
+          fernet = Fernet(clave)
+
+          archivo = "meli_refresh_token.enc"
+
+          if os.path.exists(archivo):
+              with open(archivo, "rb") as f:
+                  refresh_token = fernet.decrypt(f.read()).decode()
+          else:
+              refresh_token = os.environ["MELI_REFRESH_TOKEN_INICIAL"]
+
+          r = requests.post(
+              "https://api.mercadolibre.com/oauth/token",
+              data={
+                  "grant_type": "refresh_token",
+                  "client_id": client_id,
+                  "client_secret": client_secret,
+                  "refresh_token": refresh_token,
+              },
+              timeout=30,
+          )
+
+          r.raise_for_status()
+          data = r.json()
+
+          access_token = data["access_token"]
+          nuevo_refresh_token = data["refresh_token"]
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
+              f.write("MELI_ACCESS_TOKEN=" + access_token + "\n")
+
+          with open(archivo, "wb") as f:
+              f.write(fernet.encrypt(nuevo_refresh_token.encode()))
+
+          print("Token de Mercado Libre renovado correctamente")
+          PY
 
       - name: Ejecutar Bot de Ofertas
         run: |
           python main.py
 
-      - name: Guardar tanda, datos, imágenes e historial en GitHub
+      - name: Guardar tanda, datos, imágenes, historial y token cifrado
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -50,6 +105,7 @@ jobs:
           git add datos_tanda.txt
           git add imagenes_tanda.txt
           git add historial_publicados.txt
+          git add meli_refresh_token.enc
           git add -A ofertas/
 
           if git diff --cached --quiet; then
