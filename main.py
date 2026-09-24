@@ -28,6 +28,8 @@ HEADERS = {
 CARPETA_OFERTAS = Path("ofertas")
 CARPETA_OFERTAS.mkdir(exist_ok=True)
 
+HISTORIAL_PATH = Path("historial_publicados.txt")
+
 LOGO_PATH = Path("logo_cazadores.png")
 LOGO_ML_PATH = Path("logo_mercadolibre.png")
 PLANTILLA_OFERTA_PATH = Path("plantilla_oferta_aprobada.png")
@@ -1075,6 +1077,44 @@ def enriquecer_solo_textos_reales(datos):
 
 
 # =========================================================
+# HISTORIAL DE PUBLICACIONES
+# =========================================================
+
+def cargar_historial_publicados():
+    """Devuelve todos los item_id MLA ya usados en tandas anteriores."""
+    if not HISTORIAL_PATH.exists():
+        return set()
+
+    ids = set()
+    for linea in HISTORIAL_PATH.read_text(encoding="utf-8").splitlines():
+        linea = linea.strip().upper()
+        if re.fullmatch(r"MLA\d{7,}", linea):
+            ids.add(linea)
+
+    return ids
+
+
+def guardar_historial_publicados(productos):
+    """
+    Agrega al historial los item_id de la tanda terminada.
+    El workflow de GitHub Actions debe hacer commit de este archivo
+    para que el historial persista entre ejecuciones.
+    """
+    ids = cargar_historial_publicados()
+
+    for producto in productos:
+        item_id = limpiar_texto(producto.get("item_id", "")).upper()
+        if re.fullmatch(r"MLA\d{7,}", item_id):
+            ids.add(item_id)
+
+    HISTORIAL_PATH.write_text(
+        "\n".join(sorted(ids)) + ("\n" if ids else ""),
+        encoding="utf-8",
+    )
+    print("✅ historial_publicados.txt actualizado:", len(ids), "IDs")
+
+
+# =========================================================
 # OBTENER PRODUCTOS
 # =========================================================
 
@@ -1467,14 +1507,24 @@ def obtener_productos():
     productos = list(encontrados.values())
     print("Productos exactos emparejados:", len(productos))
 
-    if len(productos) < CANTIDAD_PRODUCTOS:
+    historial = cargar_historial_publicados()
+    print("Publicaciones ya usadas en el historial:", len(historial))
+
+    productos_nuevos = [
+        producto for producto in productos
+        if producto.get("item_id", "").upper() not in historial
+    ]
+    print("Productos nuevos disponibles:", len(productos_nuevos))
+
+    if len(productos_nuevos) < CANTIDAD_PRODUCTOS:
         raise RuntimeError(
-            f"Solo se pudieron emparejar {len(productos)} publicaciones exactas. "
-            "Se cancela la tanda para no publicar precio, imagen o link incorrectos."
+            f"Solo hay {len(productos_nuevos)} publicaciones nuevas disponibles "
+            f"y se necesitan {CANTIDAD_PRODUCTOS}. "
+            "Se cancela la tanda antes de repetir productos ya publicados."
         )
 
-    random.shuffle(productos)
-    seleccionados = productos[:CANTIDAD_PRODUCTOS]
+    random.shuffle(productos_nuevos)
+    seleccionados = productos_nuevos[:CANTIDAD_PRODUCTOS]
 
     resultado = []
     for numero, producto in enumerate(seleccionados, start=1):
@@ -1777,6 +1827,7 @@ def main():
 
     print("Productos seleccionados:", len(productos))
     guardar_tanda(productos)
+    guardar_historial_publicados(productos)
     print("✅ PROCESO COMPLETO FINALIZADO")
 
 
