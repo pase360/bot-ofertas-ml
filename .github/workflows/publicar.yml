@@ -60,11 +60,10 @@ jobs:
 
           archivo = "meli_refresh_token.enc"
 
-          if os.path.exists(archivo):
-              with open(archivo, "rb") as f:
-                  refresh_token = fernet.decrypt(f.read()).decode()
-          else:
-              refresh_token = os.environ["MELI_REFRESH_TOKEN_INICIAL"]
+          # IMPORTANTE:
+          # Esta ejecución toma directamente el refresh token NUEVO
+          # guardado en GitHub Secrets.
+          refresh_token = os.environ["MELI_REFRESH_TOKEN_INICIAL"]
 
           r = requests.post(
               "https://api.mercadolibre.com/oauth/token",
@@ -92,9 +91,6 @@ jobs:
           print("Token de Mercado Libre renovado correctamente")
           PY
 
-      # IMPORTANTE:
-      # Guarda el refresh token NUEVO antes de ejecutar main.py.
-      # Así no se pierde aunque después falle el bot.
       - name: Guardar inmediatamente token renovado
         run: |
           git config user.name "github-actions[bot]"
