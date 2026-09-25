@@ -1571,6 +1571,12 @@ def _extraer_productos_pagina_generica(url_pagina, limite=80):
                 tarjeta["nombre"] = exacto["titulo"]
         else:
             item_id = _extraer_item_id_del_contenedor(contenedor, url)
+            # En resultados de búsqueda, una URL /MLA-123... ya identifica
+            # una publicación exacta. Es seguro tomar el ID directamente.
+            if not item_id:
+                m_item = re.search(r"/MLA-?(\d{7,})", url, re.IGNORECASE)
+                if m_item:
+                    item_id = "MLA" + m_item.group(1)
             precio = tarjeta.get("precio", "")
 
         if not re.fullmatch(r"MLA\d{7,}", item_id):
@@ -1676,8 +1682,11 @@ def _leer_demanda_pendiente():
 
 
 def _url_busqueda_ml(consulta):
-    # Mercado Libre acepta búsquedas públicas por /listado?q=...
-    return "https://listado.mercadolibre.com.ar/_NoIndex_True?" + urlencode({"q": consulta})
+    """Construye la URL pública normal de resultados de Mercado Libre."""
+    slug = limpiar_texto(consulta).lower()
+    slug = re.sub(r"[^a-z0-9áéíóúüñ]+", "-", slug, flags=re.IGNORECASE)
+    slug = slug.strip("-")
+    return f"https://listado.mercadolibre.com.ar/{slug}" if slug else URL_OFERTAS
 
 
 def _puntaje_producto_demanda(producto):
