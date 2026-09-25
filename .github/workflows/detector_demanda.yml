@@ -1,0 +1,44 @@
+name: Probar Detector de Demanda
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+
+jobs:
+  detectar:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Instalar librerías
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml
+
+      - name: Ejecutar Detector de Demanda
+        run: |
+          python detector_demanda.py
+
+      - name: Guardar demandas detectadas
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add demandas_detectadas.json
+
+          if git diff --cached --quiet; then
+            echo "No hubo cambios en las demandas"
+          else
+            git commit -m "Actualizar demandas detectadas"
+            git pull --rebase origin main
+            git push origin main
+          fi
