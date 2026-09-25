@@ -1429,398 +1429,147 @@ def guardar_historial_publicados(productos):
     print("✅ historial_publicados.txt actualizado:", len(ids), "IDs")
 
 
-def _meli_headers():
-    token = limpiar_texto(os.getenv("MELI_ACCESS_TOKEN", ""))
-    if not token:
-        raise RuntimeError(
-            "Falta MELI_ACCESS_TOKEN. El workflow debe renovar el token antes de ejecutar main.py."
-        )
-    return {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
-        "User-Agent": HEADERS["User-Agent"],
-    }
-
-
-def _meli_get_json(url, params=None, timeout=30, aceptar_404=False):
-    response = requests.get(
-        url,
-        headers=_meli_headers(),
-        params=params,
-        timeout=timeout,
-    )
-
-    if aceptar_404 and response.status_code == 404:
-        return None
-
-    # Diagnóstico seguro: si Mercado Libre rechaza la consulta, mostrar el
-    # código y el cuerpo de la respuesta para conocer la causa real del 403.
-    # Nunca imprime el header Authorization ni el access token.
-    if response.status_code >= 400:
-        cuerpo = limpiar_texto(response.text)
-        if len(cuerpo) > 2000:
-            cuerpo = cuerpo[:2000] + " ...[truncado]"
-        print(
-            "MELI API ERROR",
-            f"status={response.status_code}",
-            f"url={response.url}",
-            f"body={cuerpo}",
-        )
-
-    response.raise_for_status()
-    return response.json()
-
-
-def _categoria_id_desde_url_mas_vendidos(url):
+def _es_url_mas_vendidos_general(url):
+    """Acepta solo la sección general de Más vendidos, sin categorías."""
     try:
-        path = urlsplit(url).path.rstrip("/")
+        partes = urlsplit(url)
+        path = partes.path.rstrip("/").lower()
+        return (
+            "mercadolibre.com.ar" in partes.netloc.lower()
+            and path == "/mas-vendidos"
+        )
     except Exception:
-        return ""
-    m = re.fullmatch(r"/mas-vendidos/(MLA\d+)", path, re.IGNORECASE)
-    return m.group(1).upper() if m else ""
+        return False
 
 
-def _categorias_raiz_desde_portada_mas_vendidos():
+def _urls_mas_vendidos_misma_seccion(soup, base_url):
     """
-    Conserva el criterio acordado: se parte de la portada pública de Más Vendidos
-    y solo se usan categorías que Mercado Libre enlaza desde esa portada.
-    Después la API oficial se usa para bajar hasta categorías hoja, que son las
-    que acepta /highlights.
+    Busca enlaces de continuación/paginación de la MISMA sección general
+    de Más vendidos. Nunca entra en /mas-vendidos/MLA... (categorías).
     """
-    response = safe_get(URL_MAS_VENDIDOS, timeout=30)
-    soup = BeautifulSoup(response.text, "html.parser")
-    ids = []
+    urls = []
     vistos = set()
 
     for enlace in soup.find_all("a", href=True):
-        categoria_id = _categoria_id_desde_url_mas_vendidos(
-            limpiar_url(enlace.get("href"))
-        )
-        if categoria_id and categoria_id not in vistos:
-            vistos.add(categoria_id)
-            ids.append(categoria_id)
-
-    print("Categorías detectadas en portada de Más Vendidos:", len(ids), ids)
-    return ids
-
-
-def _detalle_categoria(categoria_id):
-    return _meli_get_json(
-        f"https://api.mercadolibre.com/categories/{categoria_id}",
-        timeout=30,
-        aceptar_404=True,
-    )
-
-
-def _hojas_desde_categoria(categoria_id, limite=35):
-    """
-    Obtiene categorías hoja descendientes de una categoría mostrada por la
-    portada de Más Vendidos. Se limita la exploración para no hacer cientos de
-    llamadas innecesarias.
-    """
-    hojas = []
-    pendientes = [categoria_id]
-    vistos = set()
-
-    while pendientes and len(hojas) < limite:
-        actual = pendientes.pop(0)
-        if actual in vistos:
+        href = limpiar_url(enlace.get("href"))
+        if not href:
             continue
-        vistos.add(actual)
-
-        try:
-            detalle = _detalle_categoria(actual)
-        except Exception as e:
-            print("AVISO categoría", actual, e)
+        absoluta = urljoin(base_url, href)
+        if not _es_url_mas_vendidos_general(absoluta):
             continue
 
-        if not isinstance(detalle, dict):
+        partes = urlsplit(absoluta)
+        limpia = urlunsplit((partes.scheme or "https", partes.netloc, partes.path, partes.query, ""))
+        if limpia != base_url and limpia not in vistos:
+            vistos.add(limpia)
+            urls.append(limpia)
+
+    return urls
+
+
+def _extraer_productos_de_mas_vendidos(url_pagina):
+    """Extrae publicaciones exactas de la sección general de Más vendidos."""
+    response = safe_get(url_pagina, timeout=30)
+    print("HTTP Más vendidos:", response.status_code, "|", url_pagina)
+    soup = BeautifulSoup(response.text, "html.parser")
+    resultados_embebidos = extraer_resultados_embebidos(soup)
+    print("Resultados embebidos con item_id + precio:", len(resultados_embebidos))
+
+    encontrados = {}
+    for enlace in soup.find_all("a", href=True):
+        url = limpiar_url(enlace.get("href"))
+        if not es_producto(url) or "mas-vendidos" in url:
             continue
 
-        hijos = detalle.get("children_categories") or []
-        hijos_ids = [
-            x.get("id") for x in hijos
-            if isinstance(x, dict) and re.fullmatch(r"MLA\d+", str(x.get("id", "")))
-        ]
-
-        if not hijos_ids:
-            hojas.append(actual)
+        contenedor = encontrar_contenedor(enlace)
+        if not contenedor:
             continue
 
-        random.shuffle(hijos_ids)
-        # Explorar varios caminos, pero sin disparar el número de requests.
-        pendientes.extend(hijos_ids[:8])
+        tarjeta = extraer_datos_tarjeta(enlace, contenedor)
+        exacto = _buscar_resultado_para_tarjeta(tarjeta, resultados_embebidos)
 
-    return hojas
+        if exacto:
+            item_id = exacto.get("item_id", "")
+            precio = exacto.get("precio", "")
+            if exacto.get("imagen_url"):
+                tarjeta["imagen_url"] = exacto["imagen_url"]
+            if exacto.get("titulo"):
+                tarjeta["nombre"] = exacto["titulo"]
+        else:
+            item_id = _extraer_item_id_del_contenedor(contenedor, url)
+            precio = tarjeta.get("precio", "")
 
-
-def _highlights_categoria(categoria_id):
-    data = _meli_get_json(
-        f"https://api.mercadolibre.com/highlights/MLA/category/{categoria_id}",
-        timeout=30,
-        aceptar_404=True,
-    )
-    if not isinstance(data, dict):
-        return []
-
-    contenido = data.get("content") or []
-    resultado = []
-    for entrada in contenido:
-        if not isinstance(entrada, dict):
+        item_id = limpiar_texto(item_id).upper()
+        if not re.fullmatch(r"MLA\d{7,}", item_id):
             continue
-        entidad_id = limpiar_texto(entrada.get("id", "")).upper()
-        tipo = limpiar_texto(entrada.get("type", "")).upper()
-        posicion = entrada.get("position")
-        if entidad_id:
-            resultado.append({
-                "id": entidad_id,
-                "type": tipo,
-                "position": posicion,
-                "category_id": categoria_id,
-            })
-    return resultado
+        if not precio or precio == "Precio no disponible":
+            continue
+        if not tarjeta.get("imagen_url"):
+            continue
 
+        tarjeta["item_id"] = item_id
+        tarjeta["precio"] = precio
+        tarjeta["url_original"] = _url_exacta_con_item(url, item_id)
+        encontrados.setdefault(item_id, tarjeta)
 
-def _item_ids_desde_highlight(entrada):
-    entidad_id = entrada.get("id", "")
-    tipo = entrada.get("type", "")
-
-    # Algunas respuestas pueden devolver directamente una publicación.
-    if tipo in ("ITEM", "LISTING") and re.fullmatch(r"MLA\d{7,}", entidad_id):
-        return [entidad_id]
-
-    if tipo == "PRODUCT" or (tipo == "" and re.fullmatch(r"MLA\d{6,8}", entidad_id)):
-        data = _meli_get_json(
-            f"https://api.mercadolibre.com/products/{entidad_id}/items",
-            timeout=30,
-            aceptar_404=True,
-        )
-        if not isinstance(data, dict):
-            return []
-        ids = []
-        for item in data.get("results") or []:
-            if not isinstance(item, dict):
-                continue
-            item_id = limpiar_texto(item.get("item_id", item.get("id", ""))).upper()
-            if re.fullmatch(r"MLA\d{7,}", item_id):
-                ids.append(item_id)
-        return ids
-
-    if tipo == "USER_PRODUCT" or entidad_id.startswith("MLAU"):
-        up = _meli_get_json(
-            f"https://api.mercadolibre.com/user-products/{entidad_id}",
-            timeout=30,
-            aceptar_404=True,
-        )
-        if not isinstance(up, dict):
-            return []
-
-        seller_id = up.get("user_id") or up.get("seller_id")
-        if not seller_id:
-            return []
-
-        busqueda = _meli_get_json(
-            f"https://api.mercadolibre.com/users/{seller_id}/items/search",
-            params={"user_product_id": entidad_id},
-            timeout=30,
-            aceptar_404=True,
-        )
-        if not isinstance(busqueda, dict):
-            return []
-
-        return [
-            str(x).upper() for x in (busqueda.get("results") or [])
-            if re.fullmatch(r"MLA\d{7,}", str(x).upper())
-        ]
-
-    # Respaldo: si el ID ya tiene forma inequívoca de publicación larga.
-    if re.fullmatch(r"MLA\d{9,}", entidad_id):
-        return [entidad_id]
-
-    return []
-
-
-def _detalle_item_api(item_id):
-    data = _meli_get_json(
-        f"https://api.mercadolibre.com/items/{item_id}",
-        timeout=30,
-        aceptar_404=True,
-    )
-    return data if isinstance(data, dict) else None
-
-
-def _precio_venta_api(item_id):
-    """Precio de venta actual del marketplace, sin aproximaciones."""
-    data = _meli_get_json(
-        f"https://api.mercadolibre.com/items/{item_id}/sale_price",
-        params={"context": "channel_marketplace"},
-        timeout=30,
-        aceptar_404=True,
-    )
-    if not isinstance(data, dict):
-        return None, None
-
-    actual = _normalizar_numero_precio(data.get("amount"))
-    regular = _normalizar_numero_precio(data.get("regular_amount"))
-    return actual, regular
-
-
-def _imagen_item_api(item):
-    pictures = item.get("pictures") or []
-    if isinstance(pictures, list):
-        for pic in pictures:
-            if not isinstance(pic, dict):
-                continue
-            url = pic.get("secure_url") or pic.get("url")
-            if isinstance(url, str) and url.startswith("http"):
-                return url.replace("http://", "https://", 1)
-
-    url = item.get("secure_thumbnail") or item.get("thumbnail") or ""
-    if isinstance(url, str) and url.startswith("http"):
-        return url.replace("http://", "https://", 1)
-    return ""
-
-
-def _producto_desde_item_api(item_id, ranking=""):
-    item = _detalle_item_api(item_id)
-    if not item:
-        return None
-
-    estado = limpiar_texto(item.get("status", "")).lower()
-    if estado and estado != "active":
-        return None
-
-    titulo = limpiar_texto(item.get("title", ""))
-    permalink = limpiar_url(item.get("permalink", ""))
-    imagen_url = _imagen_item_api(item)
-
-    if not titulo or not permalink or not imagen_url:
-        return None
-
-    try:
-        actual, regular = _precio_venta_api(item_id)
-    except Exception as e:
-        print("AVISO precio oficial", item_id, e)
-        return None
-
-    if actual is None:
-        return None
-
-    descuento = ""
-    if regular and regular > actual:
-        porcentaje = int(round((regular - actual) * 100 / regular))
-        if porcentaje > 0:
-            descuento = f"{porcentaje}% OFF"
-
-    return {
-        "item_id": item_id,
-        "url_original": permalink,
-        "nombre": titulo,
-        "precio": _formatear_precio(actual),
-        "precio_anterior": _formatear_precio(regular) if regular and regular > actual else "",
-        "descuento": descuento,
-        "cuotas": "",
-        "ranking": ranking,
-        "rating": "",
-        "vendidos": "",
-        "imagen_url": imagen_url,
-        "atributos_visuales": [],
-        "precio_verificado": True,
-    }
+    return encontrados, _urls_mas_vendidos_misma_seccion(soup, url_pagina)
 
 
 def obtener_productos():
-    print("--- MÁS VENDIDOS: API OFICIAL /HIGHLIGHTS ---")
+    print("--- DESCARGANDO MÁS VENDIDOS GENERAL ---")
 
     historial = cargar_historial_publicados()
     print("Publicaciones ya usadas en el historial:", len(historial))
 
-    categorias_raiz = _categorias_raiz_desde_portada_mas_vendidos()
-    if not categorias_raiz:
-        raise RuntimeError(
-            "La portada de Más Vendidos no expuso categorías. Se cancela antes de usar fuentes ajenas."
-        )
+    # IMPORTANTE: solo la sección general /mas-vendidos.
+    # Si Mercado Libre expone enlaces de continuación/paginación de esa misma
+    # sección, se recorren. No se entra en categorías /mas-vendidos/MLA....
+    pendientes = deque([URL_MAS_VENDIDOS])
+    paginas_vistas = set()
+    encontrados_nuevos = {}
+    MAX_PAGINAS = 50
 
-    random.shuffle(categorias_raiz)
-    hojas = []
-    hojas_vistas = set()
+    while pendientes and len(paginas_vistas) < MAX_PAGINAS:
+        url_pagina = pendientes.popleft()
+        if url_pagina in paginas_vistas:
+            continue
+        if not _es_url_mas_vendidos_general(url_pagina):
+            continue
 
-    for raiz in categorias_raiz:
-        for hoja in _hojas_desde_categoria(raiz, limite=30):
-            if hoja not in hojas_vistas:
-                hojas_vistas.add(hoja)
-                hojas.append(hoja)
-
-    random.shuffle(hojas)
-    print("Categorías hoja candidatas para /highlights:", len(hojas))
-
-    encontrados = {}
-    categorias_revisadas = 0
-
-    for categoria_id in hojas:
-        if len(encontrados) >= CANTIDAD_PRODUCTOS:
-            break
+        paginas_vistas.add(url_pagina)
 
         try:
-            ranking = _highlights_categoria(categoria_id)
+            encontrados, continuaciones = _extraer_productos_de_mas_vendidos(url_pagina)
         except Exception as e:
-            print("AVISO highlights", categoria_id, e)
+            print("AVISO: no se pudo leer", url_pagina, "|", e)
             continue
 
-        if not ranking:
-            continue
-
-        categorias_revisadas += 1
-        print("Highlights", categoria_id, "->", len(ranking), "resultados")
-
-        for entrada in ranking:
-            if len(encontrados) >= CANTIDAD_PRODUCTOS:
-                break
-
-            try:
-                item_ids = _item_ids_desde_highlight(entrada)
-            except Exception as e:
-                print("AVISO resolviendo highlight", entrada.get("id"), e)
+        for item_id, tarjeta in encontrados.items():
+            if item_id in historial:
                 continue
+            encontrados_nuevos.setdefault(item_id, tarjeta)
 
-            # Mezclar las publicaciones que compiten por un mismo producto evita
-            # favorecer siempre al primer vendedor, pero cada precio/link se
-            # verifica luego contra ESA publicación exacta.
-            item_ids = list(dict.fromkeys(item_ids))
-            random.shuffle(item_ids)
+        print(
+            "Nuevos únicos acumulados:", len(encontrados_nuevos),
+            "| páginas de la misma sección revisadas:", len(paginas_vistas)
+        )
 
-            for item_id in item_ids:
-                if item_id in historial or item_id in encontrados:
-                    continue
+        if len(encontrados_nuevos) >= CANTIDAD_PRODUCTOS:
+            break
 
-                posicion = entrada.get("position")
-                ranking_texto = f"{posicion}º MÁS VENDIDO" if posicion else ""
+        for nueva_url in continuaciones:
+            if nueva_url not in paginas_vistas and nueva_url not in pendientes:
+                pendientes.append(nueva_url)
 
-                try:
-                    producto = _producto_desde_item_api(item_id, ranking_texto)
-                except Exception as e:
-                    print("AVISO item", item_id, e)
-                    continue
-
-                if not producto:
-                    continue
-
-                encontrados[item_id] = producto
-                print(
-                    "NUEVO VERIFICADO", item_id, "|",
-                    producto["nombre"], "|", producto["precio"]
-                )
-                break
-
-    productos = list(encontrados.values())
-    print("Productos nuevos verificados disponibles:", len(productos))
+    productos = list(encontrados_nuevos.values())
+    print("Productos nuevos disponibles:", len(productos))
 
     if len(productos) < CANTIDAD_PRODUCTOS:
         raise RuntimeError(
-            f"La API oficial de Más Vendidos permitió verificar solo {len(productos)} "
-            f"publicaciones nuevas después de revisar {categorias_revisadas} categorías hoja. "
-            f"Se necesitan {CANTIDAD_PRODUCTOS}. Se cancela la tanda antes de repetir "
-            "productos o usar precio/link no verificados."
+            f"La sección general de Más vendidos expuso solo {len(productos)} "
+            f"publicaciones nuevas válidas después de revisar {len(paginas_vistas)} página(s). "
+            f"Se necesitan {CANTIDAD_PRODUCTOS}. Se cancela la tanda para no repetir "
+            "ni mezclar categorías o productos con precio/link no verificados."
         )
 
     random.shuffle(productos)
