@@ -1449,8 +1449,24 @@ def _meli_get_json(url, params=None, timeout=30, aceptar_404=False):
         params=params,
         timeout=timeout,
     )
+
     if aceptar_404 and response.status_code == 404:
         return None
+
+    # Diagnóstico seguro: si Mercado Libre rechaza la consulta, mostrar el
+    # código y el cuerpo de la respuesta para conocer la causa real del 403.
+    # Nunca imprime el header Authorization ni el access token.
+    if response.status_code >= 400:
+        cuerpo = limpiar_texto(response.text)
+        if len(cuerpo) > 2000:
+            cuerpo = cuerpo[:2000] + " ...[truncado]"
+        print(
+            "MELI API ERROR",
+            f"status={response.status_code}",
+            f"url={response.url}",
+            f"body={cuerpo}",
+        )
+
     response.raise_for_status()
     return response.json()
 
