@@ -2,6 +2,7 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote_plus
 
 import requests
 from bs4 import BeautifulSoup
@@ -9,7 +10,6 @@ from bs4 import BeautifulSoup
 
 SALIDA = Path("demandas_detectadas.json")
 
-# Google Trends Argentina - tendencias actuales.
 URL_TRENDS = "https://trends.google.com/trending/rss?geo=AR"
 
 HEADERS = {
@@ -22,38 +22,49 @@ HEADERS = {
 }
 
 
-# Palabras que normalmente indican temas que NO son productos comprables.
+# =========================================================
+# PALABRAS QUE NORMALMENTE NO REPRESENTAN PRODUCTOS
+# =========================================================
+
 PALABRAS_EXCLUIDAS = {
     "futbol", "fútbol", "partido", "resultado", "gol",
-    "seleccion", "selección", "elecciones", "elección",
-    "presidente", "diputados", "senadores", "gobierno",
+    "seleccion", "selección", "mundial", "copa",
+    "gran premio", "formula 1", "fórmula 1",
+    "elecciones", "elección", "presidente", "gobierno",
+    "diputados", "senadores",
     "clima", "tiempo", "temperatura",
     "dolar", "dólar", "cotizacion", "cotización",
     "horoscopo", "horóscopo",
+    "estafa", "accidente", "muerte", "fallecio", "falleció",
+    "terremoto", "guerra",
 }
 
+
+# =========================================================
+# UTILIDADES
+# =========================================================
 
 def limpiar(texto):
     return re.sub(r"\s+", " ", str(texto or "")).strip()
 
 
-def parece_producto(texto):
-    """
-    Filtro inicial conservador.
-    No decide definitivamente que algo sea un producto:
-    solamente elimina tendencias claramente ajenas a compras.
-    """
-    texto_bajo = limpiar(texto).lower()
+def normalizar(texto):
+    return limpiar(texto).lower()
 
-    if len(texto_bajo) < 3:
-        return False
+
+def esta_excluido(texto):
+    texto = normalizar(texto)
 
     for palabra in PALABRAS_EXCLUIDAS:
-        if palabra in texto_bajo:
-            return False
+        if palabra in texto:
+            return True
 
-    return True
+    return False
 
+
+# =========================================================
+# GOOGLE TRENDS ARGENTINA
+# =========================================================
 
 def obtener_tendencias():
     response = requests.get(
@@ -68,7 +79,11 @@ def obtener_tendencias():
     tendencias = []
 
     for item in soup.find_all("item"):
-        titulo = limpiar(item.title.get_text() if item.title else "")
+        titulo = limpiar(
+            item.title.get_text()
+            if item.title
+            else ""
+        )
 
         if not titulo:
             continue
@@ -79,54 +94,194 @@ def obtener_tendencias():
         if traffic:
             trafico = limpiar(traffic.get_text())
 
-        if parece_producto(titulo):
-            tendencias.append(
-                {
-                    "busqueda": titulo,
-                    "trafico_aproximado": trafico,
-                    "fuente": "Google Trends Argentina",
-                    "detectado": datetime.now(timezone.utc).isoformat(),
-                    "estado": "pendiente",
-                }
-            )
+        tendencias.append({
+            "busqueda": titulo,
+            "trafico_aproximado": trafico,
+            "fuente": "Google Trends Argentina",
+        })
 
     return tendencias
 
 
-def guardar(tendencias):
+# =========================================================
+# COMPROBAR SI MERCADO LIBRE ENCUENTRA PRODUCTOS
+# =========================================================
+
+def buscar_en_mercado_libre(termino):
+    """
+    Una tendencia solamente pasa el filtro si Mercado Libre
+    devuelve resultados que parecen publicaciones de productos.
+    """
+
+    termino = limpiar(termino)
+
+    if not termino:
+        return False, 0
+
+    if esta_excluido(termino):
+        return False, 0
+
+    url = (
+        "https://listado.mercadolibre.com.ar/"
+        + quote_plus(termino).replace("+", "-")
+    )
+
+    try:
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            return False, 0
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        productos = set()
+
+        for enlace in soup.find_all("a", href=True):
+            href = enlace.get("href", "")
+
+            if "/MLA-" in href or "/p/MLA" in href:
+                productos.add(href)
+
+        cantidad = len(productos)
+
+        return cantidad > 0, cantidad
+
+    except Exception as error:
+        print(
+            "AVISO Mercado Libre:",
+            termino,
+            "|",
+            error,
+        )
+        return False, 0
+
+
+# =========================================================
+# FILTRAR DEMANDA COMPRABLE
+# =========================================================
+
+def detectar_demanda_comprable():
+    tendencias = obtener_tendencias()
+
+    print(
+        "Tendencias generales recibidas:",
+        len(tendencias),
+    )
+
+    comprables = []
+
+    for tendencia in tendencias:
+        termino = tendencia["busqueda"]
+
+        if esta_excluido(termino):
+            print(
+                "DESCARTADO por tema:",
+                termino,
+            )
+            continue
+
+        existe, cantidad = buscar_en_mercado_libre(
+            termino
+        )
+
+        if not existe:
+            print(
+                "DESCARTADO sin producto ML:",
+                termino,
+            )
+            continue
+
+        oportunidad = {
+            "busqueda": termino,
+            "trafico_aproximado":
+                tendencia["trafico_aproximado"],
+            "resultados_ml": cantidad,
+            "fuente":
+                tendencia["fuente"],
+            "detectado":
+                datetime.now(
+                    timezone.utc
+                ).isoformat(),
+            "estado": "pendiente",
+        }
+
+        comprables.append(oportunidad)
+
+        print(
+            "POSIBLE DEMANDA:",
+            termino,
+            "| tráfico=",
+            tendencia["trafico_aproximado"],
+            "| productos ML=",
+            cantidad,
+        )
+
+    return comprables
+
+
+# =========================================================
+# GUARDAR
+# =========================================================
+
+def guardar(demandas):
     SALIDA.write_text(
         json.dumps(
-            tendencias,
+            demandas,
             ensure_ascii=False,
             indent=2,
         ),
         encoding="utf-8",
     )
 
-    print("Demandas detectadas:", len(tendencias))
+    print()
+    print(
+        "Demandas comprables detectadas:",
+        len(demandas),
+    )
 
-    for numero, tendencia in enumerate(tendencias, start=1):
+    for numero, demanda in enumerate(
+        demandas,
+        start=1,
+    ):
         print(
-            f"{numero}. {tendencia['busqueda']} "
-            f"| tráfico={tendencia['trafico_aproximado']}"
+            f"{numero}. "
+            f"{demanda['busqueda']} "
+            f"| tráfico="
+            f"{demanda['trafico_aproximado']} "
+            f"| resultados ML="
+            f"{demanda['resultados_ml']}"
         )
 
-    print("Archivo generado:", SALIDA)
+    print(
+        "Archivo generado:",
+        SALIDA,
+    )
 
+
+# =========================================================
+# MAIN
+# =========================================================
 
 def main():
-    print("=== DETECTOR DE DEMANDA ===")
-    print("Fuente: Google Trends Argentina")
+    print(
+        "=== DETECTOR DE DEMANDA COMPRABLE ==="
+    )
 
-    try:
-        tendencias = obtener_tendencias()
-    except Exception as error:
-        print("ERROR obteniendo tendencias:", error)
-        raise
+    print(
+        "Fuente inicial: Google Trends Argentina"
+    )
 
-    guardar(tendencias)
+    demandas = detectar_demanda_comprable()
 
-    print("=== DETECTOR FINALIZADO ===")
+    guardar(demandas)
+
+    print(
+        "=== DETECTOR FINALIZADO ==="
+    )
 
 
 if __name__ == "__main__":
