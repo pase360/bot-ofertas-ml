@@ -60,9 +60,8 @@ jobs:
 
           archivo = "meli_refresh_token.enc"
 
-          # IMPORTANTE:
-          # Esta ejecución toma directamente el refresh token NUEVO
-          # guardado en GitHub Secrets.
+          # Usa directamente el refresh token nuevo guardado
+          # en GitHub Secrets.
           refresh_token = os.environ["MELI_REFRESH_TOKEN_INICIAL"]
 
           r = requests.post(
@@ -105,6 +104,33 @@ jobs:
             git pull --rebase origin main
             git push origin main
           fi
+
+      - name: Verificar identidad del token
+        run: |
+          python - <<'PY'
+          import os
+          import requests
+
+          token = os.environ["MELI_ACCESS_TOKEN"]
+
+          r = requests.get(
+              "https://api.mercadolibre.com/users/me",
+              headers={"Authorization": f"Bearer {token}"},
+              timeout=30,
+          )
+
+          print("STATUS:", r.status_code)
+
+          if r.ok:
+              data = r.json()
+              print("USER ID:", data.get("id"))
+              print("NICKNAME:", data.get("nickname"))
+              print("SITE ID:", data.get("site_id"))
+          else:
+              print("ERROR:", r.text[:1000])
+
+          r.raise_for_status()
+          PY
 
       - name: Ejecutar Bot de Ofertas
         run: |
