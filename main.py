@@ -1,4 +1,4 @@
-import os
+
 import random
 import re
 import json
@@ -1527,6 +1527,7 @@ def obtener_productos():
     pendientes = deque([URL_MAS_VENDIDOS])
     paginas_vistas = set()
     encontrados_nuevos = {}
+    encontrados_todos = {}
     MAX_PAGINAS = 50
 
     while pendientes and len(paginas_vistas) < MAX_PAGINAS:
@@ -1545,6 +1546,7 @@ def obtener_productos():
             continue
 
         for item_id, tarjeta in encontrados.items():
+            encontrados_todos.setdefault(item_id, tarjeta)
             if item_id in historial:
                 continue
             encontrados_nuevos.setdefault(item_id, tarjeta)
@@ -1561,19 +1563,34 @@ def obtener_productos():
             if nueva_url not in paginas_vistas and nueva_url not in pendientes:
                 pendientes.append(nueva_url)
 
-    productos = list(encontrados_nuevos.values())
-    print("Productos nuevos disponibles:", len(productos))
+    productos_nuevos = list(encontrados_nuevos.values())
+    print("Productos nuevos disponibles:", len(productos_nuevos))
 
-    if len(productos) < CANTIDAD_PRODUCTOS:
+    random.shuffle(productos_nuevos)
+    seleccionados = productos_nuevos[:CANTIDAD_PRODUCTOS]
+
+    # Si no hay 10 nuevos, completar con productos válidos aunque ya estén en el historial.
+    if len(seleccionados) < CANTIDAD_PRODUCTOS:
+        ids_seleccionados = {p["item_id"] for p in seleccionados}
+        repetibles = [
+            p for item_id, p in encontrados_todos.items()
+            if item_id not in ids_seleccionados
+        ]
+        random.shuffle(repetibles)
+        faltan = CANTIDAD_PRODUCTOS - len(seleccionados)
+        seleccionados.extend(repetibles[:faltan])
+
+    if len(seleccionados) < CANTIDAD_PRODUCTOS:
         raise RuntimeError(
-            f"La sección general de Más vendidos expuso solo {len(productos)} "
-            f"publicaciones nuevas válidas después de revisar {len(paginas_vistas)} página(s). "
-            f"Se necesitan {CANTIDAD_PRODUCTOS}. Se cancela la tanda para no repetir "
-            "ni mezclar categorías o productos con precio/link no verificados."
+            f"Más Vendidos expuso solo {len(seleccionados)} publicaciones válidas. "
+            f"No alcanza para formar una tanda de {CANTIDAD_PRODUCTOS}."
         )
 
-    random.shuffle(productos)
-    seleccionados = productos[:CANTIDAD_PRODUCTOS]
+    print(
+        "Tanda completa:", len(seleccionados),
+        "| nuevos:", len(productos_nuevos),
+        "| repetidos permitidos:", max(0, len(seleccionados) - len(productos_nuevos))
+    )
 
     resultado = []
     for numero, producto in enumerate(seleccionados, start=1):
