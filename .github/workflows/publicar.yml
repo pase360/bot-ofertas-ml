@@ -149,14 +149,38 @@ jobs:
 
           if r.ok:
               data = r.json()
-
-              # Mostramos solamente datos útiles para el diagnóstico.
-              # No imprimimos access token, refresh token ni Client Secret.
               print("APP ID:", data.get("id"))
               print("SITE ID:", data.get("site_id"))
               print("SCOPES:", json.dumps(data.get("scopes"), ensure_ascii=False))
           else:
               print("RESPUESTA:", r.text[:1000])
+          PY
+
+      - name: Consultar grants de la aplicacion
+        env:
+          MELI_CLIENT_ID: ${{ secrets.MELI_CLIENT_ID }}
+        run: |
+          python - <<'PY'
+          import os
+          import requests
+          import json
+
+          token = os.environ["MELI_ACCESS_TOKEN"]
+          app_id = os.environ["MELI_CLIENT_ID"]
+
+          r = requests.get(
+              f"https://api.mercadolibre.com/applications/{app_id}/grants",
+              headers={"Authorization": f"Bearer {token}"},
+              timeout=30,
+          )
+
+          print("STATUS GRANTS:", r.status_code)
+
+          if r.ok:
+              data = r.json()
+              print("GRANTS:", json.dumps(data, ensure_ascii=False, indent=2))
+          else:
+              print("RESPUESTA GRANTS:", r.text[:2000])
           PY
 
       - name: Probar permiso Metricas del negocio
