@@ -1,0 +1,408 @@
+{
+  "generado": "2026-09-25T12:23:37.600376+00:00",
+  "tipo": "candidatos_demanda_producto",
+  "aprendizaje_activo": false,
+  "nota": "La puntuacion actual usa señales de Mercado Libre. Los clics, ventas y comisiones se incorporaran en la etapa de aprendizaje.",
+  "productos": [
+    {
+      "item_id": "MLA39962085",
+      "titulo": "1º MÁS VENDIDO $ 23.524 Auriculares Xiaomi Redmi Buds 6 Play negro",
+      "url": "https://www.mercadolibre.com.ar/auriculares-xiaomi-redmi-buds-6-play-negro/p/MLA39962085",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 1,
+      "puntaje_demanda": 140
+    },
+    {
+      "item_id": "MLA45748770",
+      "titulo": "2º MÁS VENDIDO $ 425.580 Envío gratis Celular Samsung Galaxy A16 128gb Dual Sim 6gb Ram - Gris",
+      "url": "https://www.mercadolibre.com.ar/celular-samsung-galaxy-a16-128gb-dual-sim-6gb-ram-gris/p/MLA45748770",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 2,
+      "puntaje_demanda": 140
+    },
+    {
+      "item_id": "MLA66344082",
+      "titulo": "3º MÁS VENDIDO $ 449.999 $ 326.774 72 27 % OFF Envío gratis Motorola G17 de 256 Gb Alaskan Blue",
+      "url": "https://www.mercadolibre.com.ar/motorola-g17-de-256-gb-alaskan-blue/p/MLA66344082",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 3,
+      "puntaje_demanda": 140
+    },
+    {
+      "item_id": "MLA48955880",
+      "titulo": "4º MÁS VENDIDO $ 469.999 $ 281.836 34 40 % OFF Envío gratis Celular Samsung Galaxy A16 128GB 4GB RAM",
+      "url": "https://www.mercadolibre.com.ar/celular-samsung-galaxy-a16-128gb-4gb-ram/p/MLA48955880",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 4,
+      "puntaje_demanda": 140
+    },
+    {
+      "item_id": "MLA18382231",
+      "titulo": "5º MÁS VENDIDO $ 39.131 $ 32.500 16 % OFF Extensor de rango TP-Link para pared TL-WA850RE V7 Inalámbrico N 300Mbps",
+      "url": "https://www.mercadolibre.com.ar/extensor-de-rango-tp-link-para-pared-tl-wa850re-v7-inalambrico-n-300mbps/p/MLA18382231",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 5,
+      "puntaje_demanda": 140
+    },
+    {
+      "item_id": "MLA65290702",
+      "titulo": "6º MÁS VENDIDO $ 478.499 $ 299.999 37 % OFF Envío gratis Smartphone Moto G17 Evening Blue Memoria interna 128GB - 4GM RAM Motorola",
+      "url": "https://www.mercadolibre.com.ar/smartphone-moto-g17-evening-blue-memoria-interna-128gb-4gm-ram-motorola/p/MLA65290702",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 6,
+      "puntaje_demanda": 130
+    },
+    {
+      "item_id": "MLA68765161",
+      "titulo": "7º MÁS VENDIDO $ 23.999 Auriculares In-ear Xiaomi Redmi Buds 6 Play TWS Bluetooth 5.4 con Micrófono y Estuche de Carga Blanco",
+      "url": "https://www.mercadolibre.com.ar/auriculares-in-ear-xiaomi-redmi-buds-6-play-tws-bluetooth-54-con-microfono-y-estuche-de-carga-blanco/p/MLA68765161",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 7,
+      "puntaje_demanda": 130
+    },
+    {
+      "item_id": "MLA28743686",
+      "titulo": "9º MÁS VENDIDO $ 83.349 $ 44.399 46 % OFF Envío gratis Cargador Portatil Gadnic 25000 mAh Carga Rapida 5V 2A Dual Entrada Micro Entrada Tipo C",
+      "url": "https://www.mercadolibre.com.ar/cargador-portatil-gadnic-25000-mah-carga-rapida-5v-2a-dual-entrada-micro-entrada-tipo-c/p/MLA28743686",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 8,
+      "puntaje_demanda": 130
+    },
+    {
+      "item_id": "MLA61449318",
+      "titulo": "10º MÁS VENDIDO $ 329.999 $ 249.999 24 % OFF Envío gratis Moto G06 +128 Tendril",
+      "url": "https://www.mercadolibre.com.ar/moto-g06-128-tendril/p/MLA61449318",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 9,
+      "puntaje_demanda": 130
+    },
+    {
+      "item_id": "MLA23138483",
+      "titulo": "11º MÁS VENDIDO $ 106.999 $ 89.999 15 % OFF Envío gratis Auriculares Sony Bluetooth Inalámbricos Wh-ch520 Azul",
+      "url": "https://www.mercadolibre.com.ar/auriculares-sony-bluetooth-inalambricos-wh-ch520-azul/p/MLA23138483",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 10,
+      "puntaje_demanda": 130
+    },
+    {
+      "item_id": "MLA44561792",
+      "titulo": "12º MÁS VENDIDO $ 41.934 Envío gratis Cargador Portátil Xiaomi Power Bank 22.5w 10000 Mah Color Beige",
+      "url": "https://www.mercadolibre.com.ar/cargador-portatil-xiaomi-power-bank-225w-10000-mah-color-beige/p/MLA44561792",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 11,
+      "puntaje_demanda": 120
+    },
+    {
+      "item_id": "MLA20540330",
+      "titulo": "13º MÁS VENDIDO $ 49.000 $ 43.999 10 % OFF Envío gratis Repetidor Extensor De Señal TP-Link RE200 Doble Banda Wi-Fi AC750",
+      "url": "https://www.mercadolibre.com.ar/repetidor-extensor-de-senal-tp-link-re200-doble-banda-wi-fi-ac750/p/MLA20540330",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 12,
+      "puntaje_demanda": 120
+    },
+    {
+      "item_id": "MLA54961556",
+      "titulo": "14º MÁS VENDIDO $ 539.999 Envío gratis Samsung Galaxy A07 256 GB, teléfono celular de 8 GB, cámara de 50 MP, pantalla 6.7, protección IP54, procesador de 6 nm, negro",
+      "url": "https://www.mercadolibre.com.ar/samsung-galaxy-a07-256-gb-telefono-celular-de-8-gb-camara-de-50-mp-pantalla-67-proteccion-ip54-procesador-de-6-nm-negro/p/MLA54961556",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 13,
+      "puntaje_demanda": 120
+    },
+    {
+      "item_id": "MLA37224403",
+      "titulo": "15º MÁS VENDIDO $ 18.300 Auriculares Inalámbricos Bluetooth Genérico Compatible con iPhone Color Blanco BT01 2da generación",
+      "url": "https://www.mercadolibre.com.ar/auriculares-inalambricos-bluetooth-generico-compatible-con-iphone-color-blanco-bt01-2da-generacion/p/MLA37224403",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 14,
+      "puntaje_demanda": 120
+    },
+    {
+      "item_id": "MLA61315111",
+      "titulo": "17º MÁS VENDIDO $ 299.999 $ 204.710 31 % OFF Envío gratis Samsung Galaxy A07 64gb 4gb Ram Negro",
+      "url": "https://www.mercadolibre.com.ar/samsung-galaxy-a07-64gb-4gb-ram-negro/p/MLA61315111",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 15,
+      "puntaje_demanda": 120
+    },
+    {
+      "item_id": "MLA43319779",
+      "titulo": "18º MÁS VENDIDO $ 77.512 $ 69.999 9 % OFF Envío gratis Smartwatch Xiaomi Redmi Watch 5 Active Midnight Black Bluetooth sumergible 50M",
+      "url": "https://www.mercadolibre.com.ar/smartwatch-xiaomi-redmi-watch-5-active-midnight-black-bluetooth-sumergible-50m/p/MLA43319779",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 16,
+      "puntaje_demanda": 120
+    },
+    {
+      "item_id": "MLA66318680",
+      "titulo": "19º MÁS VENDIDO $ 44.155 $ 43.000 2 % OFF Envío gratis Auriculares Xiaomi Redmi Buds 8 Active Bluetooth Blanco",
+      "url": "https://www.mercadolibre.com.ar/auriculares-xiaomi-redmi-buds-8-active-bluetooth-blanco/p/MLA66318680",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 17,
+      "puntaje_demanda": 120
+    },
+    {
+      "item_id": "MLA42520227",
+      "titulo": "20º MÁS VENDIDO $ 129.999 $ 93.782 62 27 % OFF Envío gratis Smartwatch Xiaomi Redmi 5 Lite 1.96 Negro",
+      "url": "https://www.mercadolibre.com.ar/smartwatch-xiaomi-redmi-5-lite-196-negro/p/MLA42520227",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 18,
+      "puntaje_demanda": 120
+    },
+    {
+      "item_id": "MLA65276331",
+      "titulo": "2º MÁS VENDIDO $ 299.000 $ 219.000 26 % OFF Envío gratis Kit De Internet Vía Satélite Starlink Mini X",
+      "url": "https://www.mercadolibre.com.ar/kit-de-internet-via-satelite-starlink-mini-x/p/MLA65276331",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 19,
+      "puntaje_demanda": 120
+    },
+    {
+      "item_id": "MLA51874113",
+      "titulo": "3º MÁS VENDIDO $ 18.990 $ 18.040 50 5 % OFF Filamento Hellbot Ecofila Recarga Pla 1,75mm 1kg V2 Color Azul",
+      "url": "https://www.mercadolibre.com.ar/filamento-hellbot-ecofila-recarga-pla-175mm-1kg-v2-color-azul/p/MLA51874113",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 20,
+      "puntaje_demanda": 120
+    },
+    {
+      "item_id": "MLA14811959",
+      "titulo": "4º MÁS VENDIDO $ 4.930 Papel Fotográfico Autoadhesivo A4 Brillante 20 Hojas Art Jet",
+      "url": "https://www.mercadolibre.com.ar/papel-fotografico-autoadhesivo-a4-brillante-20-hojas-art-jet/p/MLA14811959",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 21,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA70237860",
+      "titulo": "5º MÁS VENDIDO $ 299.000 $ 219.000 26 % OFF Envío gratis Starlink Kit De Internet Satelital Mini Car Pack",
+      "url": "https://www.mercadolibre.com.ar/starlink-kit-de-internet-satelital-mini-car-pack/p/MLA70237860",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 22,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA45739217",
+      "titulo": "6º MÁS VENDIDO $ 20.990 Filamento PLA Hellbot Ecofila Lock 1kg Blanco 1.75mm 335m para Impresión 3D",
+      "url": "https://www.mercadolibre.com.ar/filamento-pla-hellbot-ecofila-lock-1kg-blanco-175mm-335m-para-impresion-3d/p/MLA45739217",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 23,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA23212054",
+      "titulo": "7º MÁS VENDIDO $ 12.000 Soporte Tele 32 43 50 55 Extensor Reforzado Doble Brazo 30kg Color Negro",
+      "url": "https://www.mercadolibre.com.ar/soporte-tele-32-43-50-55-extensor-reforzado-doble-brazo-30kg-color-negro/p/MLA23212054",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 24,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA10895578",
+      "titulo": "8º MÁS VENDIDO $ 27.100 Filamento 3D Grilon3 PLA de 1.75mm y 1kg amarillo",
+      "url": "https://www.mercadolibre.com.ar/filamento-3d-grilon3-pla-de-175mm-y-1kg-amarillo/p/MLA10895578",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 25,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA20800098",
+      "titulo": "9º MÁS VENDIDO $ 11.500 $ 7.527 34 % OFF Resma Punax A4 75 Gr Blanco Obra para Impresora o Fotocopiadora",
+      "url": "https://www.mercadolibre.com.ar/resma-punax-a4-75-gr-blanco-obra-para-impresora-o-fotocopiadora/p/MLA20800098",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 26,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA15144095",
+      "titulo": "11º MÁS VENDIDO $ 16.400 Mouse Logitech M170 Inalambrico Usb - Negro",
+      "url": "https://www.mercadolibre.com.ar/mouse-logitech-m170-inalambrico-usb-negro/p/MLA15144095",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 27,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA39428394",
+      "titulo": "12º MÁS VENDIDO $ 7.131 $ 6.774 45 5 % OFF Toner Alternativo Tecnovibe Tn1060 Para Brother Hl1110 Hl1112 Hl1200 Hl1212w Dcp1512 Dcp1617nw Mfc1810",
+      "url": "https://www.mercadolibre.com.ar/toner-alternativo-tecnovibe-tn1060-para-brother-hl1110-hl1112-hl1200-hl1212w-dcp1512-dcp1617nw-mfc1810/p/MLA39428394",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 28,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA10460742",
+      "titulo": "14º MÁS VENDIDO $ 18.975 Filamento impresora 3D PLA Plast.ar de 1.75mm x 1 kg. Color amarillo.",
+      "url": "https://www.mercadolibre.com.ar/filamento-impresora-3d-pla-plastar-de-175mm-x-1-kg-color-amarillo/p/MLA10460742",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 29,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA34500343",
+      "titulo": "15º MÁS VENDIDO $ 25.542 Mando Inalámbrico Joystick Negro",
+      "url": "https://www.mercadolibre.com.ar/mando-inalambrico-joystick-negro/p/MLA34500343",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 30,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA28066801",
+      "titulo": "16º MÁS VENDIDO $ 19.999 $ 15.999 20 % OFF Mouse Pad Xl Escritorio Gamer Oficina 90 X 40 Cm Antideslizante Lavable Fg Tech Rosa",
+      "url": "https://www.mercadolibre.com.ar/mouse-pad-xl-escritorio-gamer-oficina-90-x-40-cm-antideslizante-lavable-fg-tech-rosa/p/MLA28066801",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 31,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA25057291",
+      "titulo": "17º MÁS VENDIDO $ 54.458 $ 26.848 97 50 % OFF Mouse Inalámbrico Logitech M280 Alta Precisión y Comodidad - Color Gris Claro",
+      "url": "https://www.mercadolibre.com.ar/mouse-inalambrico-logitech-m280-alta-precision-y-comodidad-color-gris-claro/p/MLA25057291",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 32,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA43803009",
+      "titulo": "18º MÁS VENDIDO $ 96.758 $ 50.990 47 % OFF Envío gratis Mochila Viaje Carry On Avion Porta Notebook Waggs Negro Lisa",
+      "url": "https://www.mercadolibre.com.ar/mochila-viaje-carry-on-avion-porta-notebook-waggs-negro-lisa/p/MLA43803009",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 33,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA38764114",
+      "titulo": "19º MÁS VENDIDO $ 499.999 Envío gratis Kit Starlink De Internet Vía Satélite Estándar V4",
+      "url": "https://www.mercadolibre.com.ar/kit-starlink-de-internet-via-satelite-estandar-v4/p/MLA38764114",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 34,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA18010993",
+      "titulo": "20º MÁS VENDIDO $ 146.900 Envío gratis Sony PlayStation DualSense Joystick inalámbrico black PS5",
+      "url": "https://www.mercadolibre.com.ar/sony-playstation-dualsense-joystick-inalambrico-black-ps5/p/MLA18010993",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 35,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA51480002",
+      "titulo": "3º MÁS VENDIDO $ 44.999 $ 16.999 62 % OFF Pava Eléctrica Hervidora Acero Inoxidable 1.8 Lts Codini - P18HAN",
+      "url": "https://www.mercadolibre.com.ar/pava-electrica-hervidora-acero-inoxidable-18-lts-codini-p18han/p/MLA51480002",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 38,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA42072779",
+      "titulo": "4º MÁS VENDIDO $ 59.999 $ 44.999 25 % OFF Envío gratis Yogurtera Yelmo máquina yogur fábrica 1,4 litros 8 jarros color verde",
+      "url": "https://www.mercadolibre.com.ar/yogurtera-yelmo-maquina-yogur-fabrica-14-litros-8-jarros-color-verde/p/MLA42072779",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 39,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA54423757",
+      "titulo": "5º MÁS VENDIDO $ 138.787 Envío gratis Ventilador Retractil De Techo Novohome Luz Calida Fria Neutra 6 Velocidades Color Madera",
+      "url": "https://www.mercadolibre.com.ar/ventilador-retractil-de-techo-novohome-luz-calida-fria-neutra-6-velocidades-color-madera/p/MLA54423757",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 40,
+      "puntaje_demanda": 110
+    },
+    {
+      "item_id": "MLA57692573",
+      "titulo": "Combo Hidrolavadora Aspiradora Electrica Alta presion Trent HLT307 + VC19K Amarillo 50hz",
+      "url": "https://www.mercadolibre.com.ar/combo-hidrolavadora-aspiradora-electrica-alta-presion-trent-hlt307-vc19k-amarillo-50hz/p/MLA57692573?pdp_filters=deal%3AMLA779357-1#polycard_client=offers&deal_print_id=a0947ff3-0944-4354-9e32-4a583a1fe789&position=1&tracking_id=50326d1f-1501-45e7-9dc9-932c2b472aeb&wid=MLA2472449014&sid=offers",
+      "fuente": "Ofertas",
+      "posicion_fuente": 1,
+      "puntaje_demanda": 100
+    },
+    {
+      "item_id": "MLA63548072",
+      "titulo": "Colchón 1 Plaza Fika Pocket En Caja 80x190 20cm Espuma Y Resortes",
+      "url": "https://www.mercadolibre.com.ar/colchon-1-plaza-fika-pocket-en-caja-80x190-20cm-espuma-y-resortes/p/MLA63548072?pdp_filters=deal%3AMLA779357-1#polycard_client=offers&deal_print_id=a0947ff3-0944-4354-9e32-4a583a1fe789&position=3&tracking_id=50326d1f-1501-45e7-9dc9-932c2b472aeb&wid=MLA2910974588&sid=offers",
+      "fuente": "Ofertas",
+      "posicion_fuente": 3,
+      "puntaje_demanda": 100
+    },
+    {
+      "item_id": "MLA52661526",
+      "titulo": "Mini Proyector Fika Led Portátil 4k P8 Hd 720p 8000 Lumens 170 ANSI Android Wifi 4k Cine Color Blanco",
+      "url": "https://www.mercadolibre.com.ar/mini-proyector-fika-led-portatil-4k-p8-hd-720p-8000-lumens-170-ansi-android-wifi-4k-cine-color-blanco/p/MLA52661526?pdp_filters=deal%3AMLA779357-1#polycard_client=offers&deal_print_id=a0947ff3-0944-4354-9e32-4a583a1fe789&position=4&tracking_id=50326d1f-1501-45e7-9dc9-932c2b472aeb&wid=MLA1401781793&sid=offers",
+      "fuente": "Ofertas",
+      "posicion_fuente": 4,
+      "puntaje_demanda": 100
+    },
+    {
+      "item_id": "MLA62142320",
+      "titulo": "Auriculares Inalámbricos Anker soundcore P31i, Cancelación De Ruido Adaptativa En Tiempo Real, Sonido De Alta Resolución, Con Traducción, 50h De Reproducción, Audio Espacial, Carga Rápida, Ip55",
+      "url": "https://www.mercadolibre.com.ar/auriculares-inalambricos-anker-soundcore-p31i-cancelacion-de-ruido-adaptativa-en-tiempo-real-sonido-de-alta-resolucion-con-traduccion-50h-de-reproduccion-audio-espacial-carga-rapida-ip55/p/MLA62142320?pdp_filters=deal%3AMLA779357-1#polycard_client=offers&deal_print_id=a0947ff3-0944-4354-9e32-4a583a1fe789&position=5&tracking_id=50326d1f-1501-45e7-9dc9-932c2b472aeb&wid=MLA1646542861&sid=offers",
+      "fuente": "Ofertas",
+      "posicion_fuente": 5,
+      "puntaje_demanda": 100
+    },
+    {
+      "item_id": "MLA27802751",
+      "titulo": "6º MÁS VENDIDO $ 99.999 $ 62.499 37 % OFF Envío gratis Yogurtera Ultracomb YG-2712 12 Jarros 2,1lts Digital",
+      "url": "https://www.mercadolibre.com.ar/yogurtera-ultracomb-yg-2712-12-jarros-21lts-digital/p/MLA27802751",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 41,
+      "puntaje_demanda": 100
+    },
+    {
+      "item_id": "MLA38465716",
+      "titulo": "7º MÁS VENDIDO $ 92.499 $ 59.999 35 % OFF Envío gratis Aspiradora De Mano Gadnic Inalambrica 120W Succion 9000Pa Bateria 2000mAh Autonomia 25 Min Deposito 530ml Filtro HEPA Lavable Carga USB 5V Auto Hogar",
+      "url": "https://www.mercadolibre.com.ar/aspiradora-de-mano-gadnic-inalambrica-120w-succion-9000pa-bateria-2000mah-autonomia-25-min-deposito-530ml-filtro-hepa-lavable-carga-usb-5v-auto-hogar/p/MLA38465716",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 42,
+      "puntaje_demanda": 100
+    },
+    {
+      "item_id": "MLA19695532",
+      "titulo": "8º MÁS VENDIDO $ 899.999 $ 651.720 32 27 % OFF Envío gratis Aire acondicionado split frio y calor Philco PHS32HA4CNE 2900F 3400W color blanco",
+      "url": "https://www.mercadolibre.com.ar/aire-acondicionado-split-frio-y-calor-philco-phs32ha4cne-2900f-3400w-color-blanco/p/MLA19695532",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 43,
+      "puntaje_demanda": 100
+    },
+    {
+      "item_id": "MLA45758897",
+      "titulo": "9º MÁS VENDIDO $ 126.249 $ 75.749 40 % OFF Envío gratis Aspiradora 2 En 1 Gadnic Vertical + De Mano 600W 15KPa Deposito 1L Filtro HEPA Lavable Cable 5m Tubo Metalico Extensible 220V",
+      "url": "https://www.mercadolibre.com.ar/aspiradora-2-en-1-gadnic-vertical-de-mano-600w-15kpa-deposito-1l-filtro-hepa-lavable-cable-5m-tubo-metalico-extensible-220v/p/MLA45758897",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 44,
+      "puntaje_demanda": 100
+    },
+    {
+      "item_id": "MLA66422019",
+      "titulo": "10º MÁS VENDIDO $ 79.999 $ 62.499 21 % OFF Envío gratis Yogurtera Digital Ultracomb Yg 2712v 12 Frascos Vidrio Temporizador 2.2Lts",
+      "url": "https://www.mercadolibre.com.ar/yogurtera-digital-ultracomb-yg-2712v-12-frascos-vidrio-temporizador-22lts/p/MLA66422019",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 45,
+      "puntaje_demanda": 100
+    },
+    {
+      "item_id": "MLA47631092",
+      "titulo": "11º MÁS VENDIDO $ 69.470 $ 66.999 3 % OFF Envío gratis Pava Eléctrica Unnic Pantalla Digital Color Táctil Acero Inoxidable 1.7 L Temperatura Prestablecidas Ideal Para Mate Café Te Color Negro",
+      "url": "https://www.mercadolibre.com.ar/pava-electrica-unnic-pantalla-digital-color-tactil-acero-inoxidable-17-l-temperatura-prestablecidas-ideal-para-mate-cafe-te-color-negro/p/MLA47631092",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 46,
+      "puntaje_demanda": 100
+    },
+    {
+      "item_id": "MLA29707617",
+      "titulo": "12º MÁS VENDIDO $ 32.999 $ 28.999 99 12 % OFF Plancha Vapor Ultracomb 1400w Antiadherente Rociador Pl4170 Color Violeta 220V Vapor Regulable",
+      "url": "https://www.mercadolibre.com.ar/plancha-vapor-ultracomb-1400w-antiadherente-rociador-pl4170-color-violeta-220v-vapor-regulable/p/MLA29707617",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 47,
+      "puntaje_demanda": 100
+    },
+    {
+      "item_id": "MLA32629839",
+      "titulo": "13º MÁS VENDIDO $ 66.976 Envío gratis Pava Eléctrica Yelmo PE-3912",
+      "url": "https://www.mercadolibre.com.ar/pava-electrica-yelmo-pe-3912/p/MLA32629839",
+      "fuente": "Mas vendidos",
+      "posicion_fuente": 48,
+      "puntaje_demanda": 100
+    }
+  ]
+}
