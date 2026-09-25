@@ -60,8 +60,8 @@ jobs:
 
           archivo = "meli_refresh_token.enc"
 
-          # Usa directamente el refresh token nuevo guardado
-          # en GitHub Secrets.
+          # Usa directamente el refresh token nuevo
+          # guardado en GitHub Secrets.
           refresh_token = os.environ["MELI_REFRESH_TOKEN_INICIAL"]
 
           r = requests.post(
@@ -130,6 +130,28 @@ jobs:
               print("ERROR:", r.text[:1000])
 
           r.raise_for_status()
+          PY
+
+      - name: Probar permiso Metricas del negocio
+        run: |
+          python - <<'PY'
+          import os
+          import requests
+
+          token = os.environ["MELI_ACCESS_TOKEN"]
+
+          r = requests.get(
+              "https://api.mercadolibre.com/users/5502973/items_visits",
+              headers={"Authorization": f"Bearer {token}"},
+              params={
+                  "date_from": "2026-09-20",
+                  "date_to": "2026-09-24"
+              },
+              timeout=30,
+          )
+
+          print("STATUS VISITS:", r.status_code)
+          print("RESPUESTA VISITS:", r.text[:1000])
           PY
 
       - name: Ejecutar Bot de Ofertas
