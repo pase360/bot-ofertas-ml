@@ -171,6 +171,27 @@ def nombre_desde_url(url):
     return "Producto Mercado Libre"
 
 
+# =========================================================
+# FILTRO DE PRODUCTOS NO APTOS PARA EL CANAL
+# =========================================================
+
+PALABRAS_ALCOHOL = (
+    "cerveza", "beer", "vino", "wine", "fernet", "whisky", "whiskey",
+    "vodka", "gin ", "ginebra", "ron ", "rum ", "tequila", "champagne",
+    "espumante", "licor", "aperitivo alcoh", "sidra", "cognac", "coñac",
+    "brandy", "vermouth", "vermú", "campari", "aperol", "heineken",
+    "quilmes", "brahma", "stella artois", "corona", "budweiser"
+)
+
+def es_producto_permitido(producto):
+    """Excluye alcohol de cualquier fuente antes de seleccionar/publicar."""
+    texto = " ".join([
+        limpiar_texto(producto.get("nombre", "")),
+        limpiar_texto(producto.get("url_original", "")),
+    ]).lower()
+    return not any(palabra in texto for palabra in PALABRAS_ALCOHOL)
+
+
 def safe_get(url, timeout=30):
     response = requests.get(url, headers=HEADERS, timeout=timeout)
     response.raise_for_status()
@@ -1624,6 +1645,9 @@ def obtener_productos_base():
         for item_id, tarjeta in encontrados.items():
             if item_id in historial or item_id in nuevos:
                 continue
+            if not es_producto_permitido(tarjeta):
+                print("DESCARTADO por filtro (alcohol):", tarjeta.get("nombre", ""))
+                continue
             nuevos[item_id] = tarjeta
 
         print("Nuevos únicos acumulados:", len(nuevos))
@@ -1761,6 +1785,9 @@ def _extraer_busqueda_publica(consulta, limite=12):
         tarjeta["precio"] = precio
         tarjeta["url_original"] = _url_exacta_con_item(url, item_id)
         tarjeta["consulta_demanda"] = consulta
+        if not es_producto_permitido(tarjeta):
+            print("DESCARTADO por filtro (alcohol):", tarjeta.get("nombre", ""))
+            continue
         encontrados.setdefault(item_id, tarjeta)
         if len(encontrados) >= limite:
             break
