@@ -6,7 +6,7 @@ from collections import deque
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import urljoin, urlparse, urlsplit, urlunsplit, parse_qsl, urlencode
+from urllib.parse import urljoin, urlparse, urlsplit, urlunsplit, parse_qsl, urlencode, quote_plus
 
 import requests
 from bs4 import BeautifulSoup, Tag
@@ -14,7 +14,16 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 URL_MAS_VENDIDOS = "https://www.mercadolibre.com.ar/mas-vendidos"
+URL_OFERTAS = "https://www.mercadolibre.com.ar/ofertas"
 CANTIDAD_PRODUCTOS = 10
+
+# NUEVO: demanda detectada por el agente externo. Cada línea puede ser:
+#   texto buscado
+# o:
+#   texto buscado | URL pública donde apareció la intención de compra
+DEMANDA_PATH = Path("demanda_detectada.txt")
+DEMANDA_PROCESADA_PATH = Path("demanda_procesada.txt")
+REPORTE_DEMANDA_PATH = Path("reporte_demanda.txt")
 
 HEADERS = {
     "User-Agent": (
@@ -1515,94 +1524,304 @@ def _extraer_productos_de_mas_vendidos(url_pagina):
     return encontrados, _urls_mas_vendidos_misma_seccion(soup, url_pagina)
 
 
-def obtener_productos():
-    print("--- DESCARGANDO MÁS VENDIDOS GENERAL ---")
+def _urls_fuentes_ampliadas():
+    """
+    Fuentes públicas para conseguir variedad SIN repetir publicaciones.
+    Primero conserva Más Vendidos y Ofertas. Además usa búsquedas amplias por
+    categorías de alta rotación. El historial manda: un item ya publicado no
+    vuelve a entrar en la tanda normal.
+    """
+    consultas = [
+        "tecnologia", "celulares", "hogar", "cocina", "herramientas",
+        "electrodomesticos", "computacion", "audio", "deportes", "calzado",
+        "indumentaria", "belleza", "juguetes", "bebes", "mascotas",
+        "accesorios auto", "motos", "jardin", "oficina", "iluminacion",
+    ]
+    urls = [URL_MAS_VENDIDOS, URL_OFERTAS]
+    urls.extend(_url_busqueda_ml(q) for q in consultas)
+    return urls
 
+
+def _extraer_productos_pagina_generica(url_pagina, limite=80):
+    """Extrae publicaciones válidas de una página pública de ML."""
+    response = safe_get(url_pagina, timeout=30)
+    print("HTTP fuente:", response.status_code, "|", url_pagina)
+    soup = BeautifulSoup(response.text, "html.parser")
+    resultados_embebidos = extraer_resultados_embebidos(soup)
+    encontrados = {}
+
+    for enlace in soup.find_all("a", href=True):
+        url = limpiar_url(enlace.get("href"))
+        if not es_producto(url):
+            continue
+
+        contenedor = encontrar_contenedor(enlace)
+        if not contenedor:
+            continue
+
+        tarjeta = extraer_datos_tarjeta(enlace, contenedor)
+        exacto = _buscar_resultado_para_tarjeta(tarjeta, resultados_embebidos)
+
+        if exacto:
+            item_id = limpiar_texto(exacto.get("item_id", "")).upper()
+            precio = exacto.get("precio", "")
+            if exacto.get("imagen_url"):
+                tarjeta["imagen_url"] = exacto["imagen_url"]
+            if exacto.get("titulo"):
+                tarjeta["nombre"] = exacto["titulo"]
+        else:
+            item_id = _extraer_item_id_del_contenedor(contenedor, url)
+            precio = tarjeta.get("precio", "")
+
+        if not re.fullmatch(r"MLA\d{7,}", item_id):
+            continue
+        if not precio or precio == "Precio no disponible":
+            continue
+        if not tarjeta.get("imagen_url"):
+            continue
+
+        tarjeta["item_id"] = item_id
+        tarjeta["precio"] = precio
+        tarjeta["url_original"] = _url_exacta_con_item(url, item_id)
+        encontrados.setdefault(item_id, tarjeta)
+        if len(encontrados) >= limite:
+            break
+
+    return encontrados
+
+
+def obtener_productos_base():
+    """
+    TANDA NORMAL: obtiene exactamente 10 publicaciones NUEVAS.
+    Nunca rellena con productos del historial. Si una fuente no alcanza,
+    continúa con otras fuentes públicas de Mercado Libre.
+    """
+    print("--- BUSCANDO 10 PRODUCTOS NUEVOS SIN REPETIR ---")
     historial = cargar_historial_publicados()
     print("Publicaciones ya usadas en el historial:", len(historial))
 
-    # IMPORTANTE: solo la sección general /mas-vendidos.
-    # Si Mercado Libre expone enlaces de continuación/paginación de esa misma
-    # sección, se recorren. No se entra en categorías /mas-vendidos/MLA....
-    pendientes = deque([URL_MAS_VENDIDOS])
-    paginas_vistas = set()
-    encontrados_nuevos = {}
-    encontrados_todos = {}
-    MAX_PAGINAS = 50
+    nuevos = {}
+    fuentes = _urls_fuentes_ampliadas()
 
-    while pendientes and len(paginas_vistas) < MAX_PAGINAS:
-        url_pagina = pendientes.popleft()
-        if url_pagina in paginas_vistas:
-            continue
-        if not _es_url_mas_vendidos_general(url_pagina):
-            continue
-
-        paginas_vistas.add(url_pagina)
-
+    for url_pagina in fuentes:
+        if len(nuevos) >= CANTIDAD_PRODUCTOS:
+            break
         try:
-            encontrados, continuaciones = _extraer_productos_de_mas_vendidos(url_pagina)
+            if _es_url_mas_vendidos_general(url_pagina):
+                encontrados, _ = _extraer_productos_de_mas_vendidos(url_pagina)
+            else:
+                encontrados = _extraer_productos_pagina_generica(url_pagina)
         except Exception as e:
-            print("AVISO: no se pudo leer", url_pagina, "|", e)
+            print("AVISO: no se pudo leer fuente", url_pagina, "|", e)
             continue
 
         for item_id, tarjeta in encontrados.items():
-            encontrados_todos.setdefault(item_id, tarjeta)
-            if item_id in historial:
+            if item_id in historial or item_id in nuevos:
                 continue
-            encontrados_nuevos.setdefault(item_id, tarjeta)
+            nuevos[item_id] = tarjeta
 
-        print(
-            "Nuevos únicos acumulados:", len(encontrados_nuevos),
-            "| páginas de la misma sección revisadas:", len(paginas_vistas)
-        )
+        print("Nuevos únicos acumulados:", len(nuevos))
 
-        if len(encontrados_nuevos) >= CANTIDAD_PRODUCTOS:
-            break
-
-        for nueva_url in continuaciones:
-            if nueva_url not in paginas_vistas and nueva_url not in pendientes:
-                pendientes.append(nueva_url)
-
-    productos_nuevos = list(encontrados_nuevos.values())
-    print("Productos nuevos disponibles:", len(productos_nuevos))
-
-    random.shuffle(productos_nuevos)
-    seleccionados = productos_nuevos[:CANTIDAD_PRODUCTOS]
-
-    # Si no hay 10 nuevos, completar con productos válidos aunque ya estén en el historial.
-    if len(seleccionados) < CANTIDAD_PRODUCTOS:
-        ids_seleccionados = {p["item_id"] for p in seleccionados}
-        repetibles = [
-            p for item_id, p in encontrados_todos.items()
-            if item_id not in ids_seleccionados
-        ]
-        random.shuffle(repetibles)
-        faltan = CANTIDAD_PRODUCTOS - len(seleccionados)
-        seleccionados.extend(repetibles[:faltan])
-
-    if len(seleccionados) < CANTIDAD_PRODUCTOS:
+    if len(nuevos) < CANTIDAD_PRODUCTOS:
         raise RuntimeError(
-            f"Más Vendidos expuso solo {len(seleccionados)} publicaciones válidas. "
-            f"No alcanza para formar una tanda de {CANTIDAD_PRODUCTOS}."
+            f"Se encontraron {len(nuevos)} productos nuevos y se necesitan "
+            f"{CANTIDAD_PRODUCTOS}. NO se usarán repetidos."
         )
 
-    print(
-        "Tanda completa:", len(seleccionados),
-        "| nuevos:", len(productos_nuevos),
-        "| repetidos permitidos:", max(0, len(seleccionados) - len(productos_nuevos))
-    )
+    candidatos = list(nuevos.values())
+    candidatos.sort(key=_puntaje_producto_demanda, reverse=True)
+    seleccionados = candidatos[:CANTIDAD_PRODUCTOS]
 
     resultado = []
     for numero, producto in enumerate(seleccionados, start=1):
         print(
-            f"ACEPTADO {numero}. item={producto['item_id']} | "
-            f"{producto['nombre']} | precio={producto['precio']} | "
-            f"url={producto['url_original']}"
+            f"NUEVO {numero}. item={producto['item_id']} | "
+            f"{producto['nombre']} | precio={producto['precio']}"
         )
-        producto = enriquecer_solo_textos_reales(producto)
-        resultado.append(producto)
+        resultado.append(enriquecer_solo_textos_reales(producto))
 
     return resultado
+
+
+# =========================================================
+# NUEVO: DEMANDA REAL + BÚSQUEDA DIRECTA EN MERCADO LIBRE
+# =========================================================
+
+def _leer_demanda_pendiente():
+    """Lee necesidades detectadas sin volver a procesar la misma línea."""
+    if not DEMANDA_PATH.exists():
+        return []
+
+    procesadas = set()
+    if DEMANDA_PROCESADA_PATH.exists():
+        procesadas = {
+            limpiar_texto(x)
+            for x in DEMANDA_PROCESADA_PATH.read_text(encoding="utf-8").splitlines()
+            if limpiar_texto(x)
+        }
+
+    pendientes = []
+    for linea in DEMANDA_PATH.read_text(encoding="utf-8").splitlines():
+        linea = limpiar_texto(linea)
+        if not linea or linea.startswith("#") or linea in procesadas:
+            continue
+
+        partes = [limpiar_texto(x) for x in linea.split("|", 1)]
+        consulta = partes[0]
+        origen = partes[1] if len(partes) > 1 else ""
+        if len(consulta) >= 3:
+            pendientes.append({"linea": linea, "consulta": consulta, "origen": origen})
+
+    return pendientes
+
+
+def _url_busqueda_ml(consulta):
+    # Mercado Libre acepta búsquedas públicas por /listado?q=...
+    return "https://listado.mercadolibre.com.ar/_NoIndex_True?" + urlencode({"q": consulta})
+
+
+def _puntaje_producto_demanda(producto):
+    """Ordena sin inventar datos: ventas, rating, descuento y cuotas visibles."""
+    puntos = 0.0
+    vendidos = limpiar_texto(producto.get("vendidos", "")).lower()
+    m = re.search(r"([\d\.]+)\s*(mil)?", vendidos)
+    if m:
+        try:
+            n = float(m.group(1).replace(".", ""))
+            if m.group(2):
+                n *= 1000
+            puntos += min(n / 100.0, 500.0)
+        except Exception:
+            pass
+
+    try:
+        puntos += float(producto.get("rating") or 0) * 15
+    except Exception:
+        pass
+
+    m = re.search(r"(\d{1,2})%", producto.get("descuento", ""))
+    if m:
+        puntos += int(m.group(1)) * 2
+
+    if producto.get("cuotas"):
+        puntos += 20
+    if producto.get("precio") and producto.get("precio") != "Precio no disponible":
+        puntos += 10
+    if producto.get("imagen_url"):
+        puntos += 10
+    return puntos
+
+
+def _extraer_busqueda_publica(consulta, limite=12):
+    """Busca exactamente lo pedido en la web pública de Mercado Libre."""
+    url_busqueda = _url_busqueda_ml(consulta)
+    print("🔎 DEMANDA: buscando en Mercado Libre:", consulta)
+    response = safe_get(url_busqueda, timeout=30)
+    soup = BeautifulSoup(response.text, "html.parser")
+    resultados_embebidos = extraer_resultados_embebidos(soup)
+
+    encontrados = {}
+    for enlace in soup.find_all("a", href=True):
+        url = limpiar_url(enlace.get("href"))
+        if not es_producto(url):
+            continue
+
+        contenedor = encontrar_contenedor(enlace)
+        if not contenedor:
+            continue
+
+        tarjeta = extraer_datos_tarjeta(enlace, contenedor)
+        exacto = _buscar_resultado_para_tarjeta(tarjeta, resultados_embebidos)
+        if exacto:
+            item_id = limpiar_texto(exacto.get("item_id", "")).upper()
+            precio = exacto.get("precio", "")
+            if exacto.get("imagen_url"):
+                tarjeta["imagen_url"] = exacto["imagen_url"]
+            if exacto.get("titulo"):
+                tarjeta["nombre"] = exacto["titulo"]
+        else:
+            item_id = _extraer_item_id_del_contenedor(contenedor, url)
+            precio = tarjeta.get("precio", "")
+
+        if not re.fullmatch(r"MLA\d{7,}", item_id):
+            continue
+        if not precio or precio == "Precio no disponible" or not tarjeta.get("imagen_url"):
+            continue
+
+        tarjeta["item_id"] = item_id
+        tarjeta["precio"] = precio
+        tarjeta["url_original"] = _url_exacta_con_item(url, item_id)
+        tarjeta["consulta_demanda"] = consulta
+        encontrados.setdefault(item_id, tarjeta)
+        if len(encontrados) >= limite:
+            break
+
+    productos = list(encontrados.values())
+    productos.sort(key=_puntaje_producto_demanda, reverse=True)
+    return productos
+
+
+def obtener_productos_demanda(maximo=10):
+    """Convierte necesidades ya detectadas en productos concretos para publicar."""
+    pendientes = _leer_demanda_pendiente()
+    if not pendientes:
+        return [], []
+
+    historial = cargar_historial_publicados()
+    elegidos = []
+    ids = set()
+    lineas_resueltas = []
+    reporte = []
+
+    for necesidad in pendientes:
+        if len(elegidos) >= maximo:
+            break
+        try:
+            candidatos = _extraer_busqueda_publica(necesidad["consulta"])
+        except Exception as e:
+            print("AVISO demanda:", necesidad["consulta"], "|", e)
+            continue
+
+        # DEMANDA URGENTE: jamás reutiliza una publicación del historial.
+        candidatos = [
+            p for p in candidatos
+            if p.get("item_id") not in historial and p.get("item_id") not in ids
+        ]
+        candidatos.sort(key=_puntaje_producto_demanda, reverse=True)
+        candidato = candidatos[0] if candidatos else None
+        if not candidato:
+            continue
+
+        candidato["origen_demanda"] = necesidad.get("origen", "")
+        candidato = enriquecer_solo_textos_reales(candidato)
+        elegidos.append(candidato)
+        ids.add(candidato["item_id"])
+        lineas_resueltas.append(necesidad["linea"])
+        reporte.append(
+            f"{necesidad['consulta']} | {candidato['nombre']} | "
+            f"{candidato['precio']} | {candidato['url_original']} | {necesidad.get('origen','')}"
+        )
+
+    if reporte:
+        REPORTE_DEMANDA_PATH.write_text("\n".join(reporte) + "\n", encoding="utf-8")
+
+    return elegidos, lineas_resueltas
+
+
+def _marcar_demanda_procesada(lineas):
+    if not lineas:
+        return
+    anteriores = []
+    if DEMANDA_PROCESADA_PATH.exists():
+        anteriores = DEMANDA_PROCESADA_PATH.read_text(encoding="utf-8").splitlines()
+    conjunto = {limpiar_texto(x) for x in anteriores if limpiar_texto(x)}
+    conjunto.update(limpiar_texto(x) for x in lineas if limpiar_texto(x))
+    DEMANDA_PROCESADA_PATH.write_text("\n".join(sorted(conjunto)) + "\n", encoding="utf-8")
+
+
+def obtener_productos():
+    """Compatibilidad: la tanda normal siempre contiene 10 productos nuevos."""
+    return obtener_productos_base()
 
 
 # =========================================================
@@ -1880,19 +2099,58 @@ def guardar_tanda(productos):
 
 
 # =========================================================
+# COLA URGENTE PARA AUTOMATE
+# =========================================================
+
+def guardar_urgentes(productos):
+    """
+    Genera archivos separados para demanda detectada. No pisa la tanda normal.
+    El detector puede disparar este workflow en cuanto agregue demanda_detectada.txt;
+    Automate podrá vigilar estos archivos y publicar cada urgente inmediatamente.
+    """
+    if not productos:
+        return
+
+    links, datos_txt, imagenes = [], [], []
+    for numero, datos in enumerate(productos, start=1):
+        archivo = crear_imagen_oferta(datos, 1000 + numero)
+        links.append(datos["url_original"])
+        nombre = datos["nombre"].replace("|", "-")
+        precio = datos["precio"].replace("|", "-")
+        cuotas = datos.get("cuotas", "").replace("|", "-")
+        datos_txt.append(f"{nombre} | {precio} | {cuotas}")
+        imagenes.append(f"{RAW_BASE}/{archivo}")
+
+    Path("urgente_links.txt").write_text("\n".join(links), encoding="utf-8")
+    Path("urgente_datos.txt").write_text("\n".join(datos_txt), encoding="utf-8")
+    Path("urgente_imagenes.txt").write_text("\n".join(imagenes), encoding="utf-8")
+    print("🚨 Cola urgente generada:", len(productos), "producto(s) nuevos")
+
+
+# =========================================================
 # MAIN
 # =========================================================
 
 def main():
-    productos = obtener_productos()
+    # 1) DEMANDA URGENTE: si existe, se prepara aparte y sin repetidos.
+    urgentes, lineas_resueltas = obtener_productos_demanda(maximo=50)
+    if urgentes:
+        guardar_urgentes(urgentes)
+        guardar_historial_publicados(urgentes)
+        _marcar_demanda_procesada(lineas_resueltas)
 
-    if not productos:
-        raise RuntimeError("No se pudieron obtener productos")
+    # 2) TANDA NORMAL: siempre 10 NUEVOS; nunca completa con repetidos.
+    productos = obtener_productos_base()
+    if len(productos) != CANTIDAD_PRODUCTOS:
+        raise RuntimeError(
+            f"La tanda normal debe tener {CANTIDAD_PRODUCTOS} productos nuevos; "
+            f"se obtuvieron {len(productos)}."
+        )
 
-    print("Productos seleccionados:", len(productos))
+    print("Productos nuevos seleccionados:", len(productos))
     guardar_tanda(productos)
     guardar_historial_publicados(productos)
-    print("✅ PROCESO COMPLETO FINALIZADO")
+    print("✅ PROCESO COMPLETO FINALIZADO SIN REPETIDOS")
 
 
 if __name__ == "__main__":
