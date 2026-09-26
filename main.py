@@ -859,6 +859,159 @@ def precio_desde_dom_actual(soup):
     return ""
 
 
+
+def precio_oferta_exacta_desde_json_ld(soup, item_id=""):
+    """
+    Busca SOLO el precio de una Offer concreta de la publicación.
+
+    IMPORTANTE:
+    - NO usa AggregateOffer.lowPrice ni lowPrice ("desde").
+    - NO usa precios anteriores/originales.
+    - Si puede identificar item_id/SKU en la oferta, exige coincidencia.
+    - Si existe una única Offer concreta con price, puede usarla.
+    """
+    if not soup:
+        return ""
+
+    item_id = limpiar_texto(item_id).upper()
+    ofertas = []
+
+    for item in extraer_json_ld(soup):
+        for nodo in _iterar_json(item):
+            tipo = nodo.get("@type")
+            tipos = tipo if isinstance(tipo, list) else [tipo]
+            tipos = [str(x).lower() for x in tipos if x]
+
+            # AggregateOffer describe el catálogo ("desde"). Se ignora completo.
+            if "aggregateoffer" in tipos:
+                continue
+
+            if "offer" in tipos:
+                numero = _normalizar_numero_precio(nodo.get("price"))
+                if numero is None:
+                    continue
+
+                identificadores = " ".join(
+                    limpiar_texto(nodo.get(k, ""))
+                    for k in ("sku", "item_id", "itemId", "id", "url")
+                ).upper()
+
+                ofertas.append((numero, identificadores))
+
+            # Product puede contener una Offer concreta.
+            if "product" in tipos:
+                offers = nodo.get("offers")
+                if isinstance(offers, dict):
+                    offers = [offers]
+                if isinstance(offers, list):
+                    for offer in offers:
+                        if not isinstance(offer, dict):
+                            continue
+                        otipo = offer.get("@type")
+                        otipos = otipo if isinstance(otipo, list) else [otipo]
+                        otipos = [str(x).lower() for x in otipos if x]
+                        if "aggregateoffer" in otipos:
+                            continue
+                        numero = _normalizar_numero_precio(offer.get("price"))
+                        if numero is None:
+                            continue
+                        identificadores = " ".join(
+                            limpiar_texto(offer.get(k, ""))
+                            for k in ("sku", "item_id", "itemId", "id", "url")
+                        ).upper()
+                        ofertas.append((numero, identificadores))
+
+    if item_id:
+        for numero, identificadores in ofertas:
+            if item_id in identificadores:
+                return _formatear_precio(numero)
+
+    # Una sola oferta concreta: no hay ambigüedad de "desde".
+    unicos = []
+    for numero, _ in ofertas:
+        if numero not in unicos:
+            unicos.append(numero)
+    if len(unicos) == 1:
+        return _formatear_precio(unicos[0])
+
+    return ""
+
+
+def precio_oferta_exacta_desde_dom(soup):
+    """
+    Lee el precio principal visible de la oferta seleccionada.
+    Evita bloques de 'otras opciones', 'desde', precios anteriores y cuotas.
+    """
+    if not soup:
+        return ""
+
+    selectores = [
+        ".ui-pdp-price__main-container .ui-pdp-price__second-line .andes-money-amount",
+        ".ui-pdp-price__second-line .andes-money-amount",
+        "[data-testid='price-part'] .andes-money-amount",
+    ]
+
+    for selector in selectores:
+        try:
+            nodos = soup.select(selector)
+        except Exception:
+            nodos = []
+
+        for nodo in nodos:
+            if _es_precio_anterior(nodo):
+                continue
+
+            # Rechaza si el nodo vive dentro de una zona que indica catálogo,
+            # otras opciones o financiación.
+            padre = nodo
+            contexto = ""
+            for _ in range(6):
+                if padre is None or not isinstance(padre, Tag):
+                    break
+                contexto += " " + limpiar_texto(padre.get_text(" ", strip=True)).lower()
+                clases = " ".join(padre.get("class", [])).lower()
+                contexto += " " + clases
+                padre = padre.parent
+
+            if any(x in contexto for x in (
+                "otras opciones de compra",
+                "más opciones desde",
+                "mas opciones desde",
+                "productos nuevos desde",
+                "cuotas de",
+            )):
+                continue
+
+            valor = leer_money_amount(nodo)
+            numero = _normalizar_numero_precio(valor)
+            if numero is not None:
+                return _formatear_precio(numero)
+
+    return ""
+
+
+def obtener_precio_publicacion_exacta(soup, item_id=""):
+    """
+    Precio de LA publicación/oferta enlazada.
+    Nunca devuelve lowPrice/precio mínimo de catálogo.
+    """
+    precio = precio_oferta_exacta_desde_json_ld(soup, item_id)
+    if precio:
+        return precio
+
+    precio = precio_oferta_exacta_desde_dom(soup)
+    if precio:
+        return precio
+
+    # Meta price solo se acepta como último respaldo porque suele describir
+    # la oferta seleccionada, no el mínimo AggregateOffer.
+    precio = precio_desde_meta(soup)
+    if precio:
+        return precio
+
+    return ""
+
+
 def obtener_precio_actual_verificado(soup):
     """
     Devuelve SOLO un precio actual verificable.
@@ -1653,25 +1806,21 @@ def _extraer_productos_pagina_generica(url_pagina, limite=80):
 
 def obtener_productos_base():
     """
-    TANDA NORMAL: obtiene exactamente 10 publicaciones NUEVAS.
+    Obtiene 10 publicaciones NUEVAS cuyo precio corresponde a la publicación
+    exacta enlazada. Nunca usa 'desde'/lowPrice como precio final del canal.
 
-    La unidad válida es el mismo resultado de Mercado Libre:
-    item_id + enlace exacto + precio + imagen. No vuelve a exigir que GitHub
-    pueda leer el precio desde la página individual, porque Mercado Libre no
-    está exponiendo ese dato allí al runner de GitHub.
-
-    Si una fuente no alcanza, continúa con las demás. Nunca rellena con
-    productos del historial.
+    Si una publicación no permite verificar su propio precio, se descarta
+    solamente ese candidato y continúa buscando otro.
     """
-    print("--- BUSCANDO 10 PRODUCTOS NUEVOS SIN REPETIR ---")
+    print("--- BUSCANDO 10 PUBLICACIONES NUEVAS CON PRECIO DE LA OFERTA EXACTA ---")
     historial = cargar_historial_publicados()
     print("Publicaciones ya usadas en el historial:", len(historial))
 
-    nuevos = {}
-    fuentes = _urls_fuentes_ampliadas()
+    verificados = []
+    ids_verificados = set()
 
-    for url_pagina in fuentes:
-        if len(nuevos) >= CANTIDAD_PRODUCTOS:
+    for url_pagina in _urls_fuentes_ampliadas():
+        if len(verificados) >= CANTIDAD_PRODUCTOS:
             break
 
         try:
@@ -1680,66 +1829,91 @@ def obtener_productos_base():
             else:
                 encontrados = _extraer_productos_pagina_generica(url_pagina)
         except Exception as e:
-            print("AVISO: no se pudo leer fuente", url_pagina, "|", e)
+            print("AVISO fuente:", url_pagina, "|", e)
             continue
 
+        candidatos = []
         for item_id, tarjeta in encontrados.items():
-            if item_id in historial or item_id in nuevos:
+            if item_id in historial or item_id in ids_verificados:
                 continue
             if not es_producto_permitido(tarjeta):
                 print("DESCARTADO por filtro (alcohol):", tarjeta.get("nombre", ""))
                 continue
-
-            # Solo acepta registros completos del mismo resultado.
-            if not tarjeta.get("url_original"):
+            if not tarjeta.get("url_original") or not tarjeta.get("imagen_url"):
                 continue
-            if not tarjeta.get("imagen_url"):
+            candidatos.append(tarjeta)
+
+        candidatos.sort(key=_puntaje_producto_demanda, reverse=True)
+
+        for producto in candidatos:
+            if len(verificados) >= CANTIDAD_PRODUCTOS:
+                break
+
+            item_id = limpiar_texto(producto.get("item_id", "")).upper()
+            url = producto.get("url_original", "")
+
+            if not re.fullmatch(r"MLA\d{7,}", item_id):
                 continue
-            if not tarjeta.get("precio") or tarjeta.get("precio") == "Precio no disponible":
+
+            try:
+                soup, _ = extraer_publicacion(url)
+            except Exception as e:
+                print("DESCARTADO: no se pudo abrir publicación:", item_id, "|", e)
                 continue
 
-            tarjeta["precio_verificado"] = True
-            nuevos[item_id] = tarjeta
+            if not soup:
+                print("DESCARTADO: publicación no legible:", item_id)
+                continue
 
-        print("Nuevos únicos acumulados:", len(nuevos))
+            precio_exacto = obtener_precio_publicacion_exacta(soup, item_id)
+            if not precio_exacto:
+                print(
+                    "DESCARTADO: no se pudo aislar precio de publicación exacta:",
+                    item_id, "|", producto.get("nombre", "")
+                )
+                continue
 
-    if len(nuevos) < CANTIDAD_PRODUCTOS:
-        raise RuntimeError(
-            f"Se encontraron {len(nuevos)} productos nuevos completos y se necesitan "
-            f"{CANTIDAD_PRODUCTOS}. NO se usarán repetidos."
-        )
+            # Desde este punto el precio que irá a imagen/datos es el de la
+            # publicación enlazada, no el mínimo de catálogo capturado antes.
+            precio_resultado = producto.get("precio", "")
+            producto["precio_resultado_origen"] = precio_resultado
+            producto["precio"] = precio_exacto
+            producto["precio_verificado"] = True
 
-    candidatos = list(nuevos.values())
-    candidatos.sort(key=_puntaje_producto_demanda, reverse=True)
-    seleccionados = candidatos[:CANTIDAD_PRODUCTOS]
-
-    # La publicación individual se usa solo para características. Si ML no la
-    # deja leer, se conservan las características derivables del título.
-    resultado = []
-    for producto in seleccionados:
-        try:
-            soup, _ = extraer_publicacion(producto.get("url_original", ""))
-            if soup:
+            try:
                 atributos = obtener_atributos_reales_publicacion(
                     soup, producto.get("nombre", "")
                 )
                 producto["atributos_visuales"] = (
                     atributos or atributos_desde_titulo(producto.get("nombre", ""))
                 )
-            else:
+            except Exception:
                 producto["atributos_visuales"] = atributos_desde_titulo(
                     producto.get("nombre", "")
                 )
-        except Exception as e:
-            print("AVISO características:", producto.get("item_id", ""), "|", e)
-            producto["atributos_visuales"] = atributos_desde_titulo(
-                producto.get("nombre", "")
+
+            verificados.append(producto)
+            ids_verificados.add(item_id)
+
+            print(
+                f"VERIFICADO {len(verificados)}/{CANTIDAD_PRODUCTOS}:",
+                item_id,
+                "| precio resultado=",
+                precio_resultado,
+                "| precio publicación=",
+                precio_exacto,
             )
 
-        producto["precio_verificado"] = True
-        resultado.append(producto)
+        print("Publicaciones exactas verificadas acumuladas:", len(verificados))
 
-    return resultado
+    if len(verificados) < CANTIDAD_PRODUCTOS:
+        raise RuntimeError(
+            f"Solo se consiguieron {len(verificados)} publicaciones nuevas con "
+            f"precio exacto verificable y se necesitan {CANTIDAD_PRODUCTOS}. "
+            "No se publicará una tanda incompleta ni con precio 'desde'."
+        )
+
+    return verificados[:CANTIDAD_PRODUCTOS]
 
 
 def _leer_demanda_pendiente():
