@@ -1868,6 +1868,51 @@ def _extraer_productos_pagina_generica(url_pagina, limite=80):
     return encontrados
 
 
+
+def aplicar_precio_venta_ml(producto):
+    """Corrige solo el precio después de que v11 ya encontró el producto."""
+    item_id = limpiar_texto(producto.get("item_id", "")).upper()
+    token = limpiar_texto(os.getenv("MELI_ACCESS_TOKEN", ""))
+    if not item_id or not token:
+        return producto
+
+    try:
+        r = requests.get(
+            f"https://api.mercadolibre.com/items/{item_id}/sale_price",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"context": "channel_marketplace"},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            print("AVISO sale_price", item_id, "HTTP", r.status_code, "- conserva precio v11")
+            return producto
+
+        amount = r.json().get("amount")
+        if amount is None:
+            return producto
+        numero = float(amount)
+        if numero <= 0:
+            return producto
+
+        if abs(numero - round(numero)) < 0.000001:
+            precio = f"$ {int(round(numero)):,}".replace(",", ".")
+        else:
+            entero = int(numero)
+            centavos = int(round((numero - entero) * 100))
+            precio = (f"$ {entero:,},{centavos:02d}"
+                      .replace(",", "X").replace(".", ",").replace("X", "."))
+
+        anterior = limpiar_texto(producto.get("precio", ""))
+        producto["precio"] = precio
+        producto["precio_verificado"] = True
+        producto["precio_fuente"] = "meli_sale_price"
+        print("PRECIO ML:", item_id, "| anterior=", anterior, "| venta=", precio)
+        return producto
+    except Exception as e:
+        print("AVISO sale_price", item_id, "|", e, "- conserva precio v11")
+        return producto
+
+
 def obtener_productos_base():
     """
     TANDA NORMAL ESTABLE.
@@ -2550,6 +2595,7 @@ def main():
 
     # 2) TANDA NORMAL: siempre 10 NUEVOS; nunca completa con repetidos.
     productos = obtener_productos_base()
+    productos = [aplicar_precio_venta_ml(p) for p in productos]
     if len(productos) != CANTIDAD_PRODUCTOS:
         raise RuntimeError(
             f"La tanda normal debe tener {CANTIDAD_PRODUCTOS} productos nuevos; "
