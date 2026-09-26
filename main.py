@@ -1838,6 +1838,94 @@ def _extraer_productos_pagina_generica(url_pagina, limite=80):
     return encontrados
 
 
+
+def corregir_precio_catalogo_si_corresponde(producto):
+    """
+    Conserva intacto el comportamiento de v6 para publicaciones normales.
+
+    Si el enlace es una PDP de catálogo (/p/MLA...), consulta las publicaciones
+    que compiten dentro de ESE producto de catálogo y busca el item_id que v6
+    ya extrajo del propio enlace (pdp_filters/wid). Si lo encuentra, reemplaza
+    únicamente el precio por el precio de ese item exacto.
+
+    Si la consulta no responde o no encuentra coincidencia, NO rompe la tanda:
+    deja el precio original de v6.
+    """
+    try:
+        enlace = limpiar_texto(producto.get("url_original", ""))
+        item_id = limpiar_texto(producto.get("item_id", "")).upper()
+
+        if not enlace or not item_id:
+            return producto
+
+        parsed = urlsplit(enlace)
+        m = re.search(r"/p/(MLA\d+)", parsed.path, re.I)
+        if not m:
+            return producto
+
+        product_id = m.group(1).upper()
+        url_api = f"https://api.mercadolibre.com/products/{product_id}/items"
+
+        r = requests.get(url_api, headers=HEADERS, timeout=20)
+        if r.status_code != 200:
+            print(
+                "AVISO precio catálogo: API HTTP",
+                r.status_code, "|", product_id, "| se conserva precio v6"
+            )
+            return producto
+
+        data = r.json()
+        resultados = data.get("results", [])
+        if not isinstance(resultados, list):
+            return producto
+
+        for oferta in resultados:
+            oferta_id = limpiar_texto(oferta.get("item_id", "")).upper()
+            if oferta_id != item_id:
+                continue
+
+            valor = oferta.get("price")
+            try:
+                numero = float(valor)
+            except (TypeError, ValueError):
+                return producto
+
+            if numero <= 0:
+                return producto
+
+            if abs(numero - round(numero)) < 0.000001:
+                precio = f"$ {int(round(numero)):,}".replace(",", ".")
+            else:
+                entero = int(numero)
+                centavos = int(round((numero - entero) * 100))
+                precio = (
+                    f"$ {entero:,},{centavos:02d}"
+                    .replace(",", "X")
+                    .replace(".", ",")
+                    .replace("X", ".")
+                )
+
+            anterior = limpiar_texto(producto.get("precio", ""))
+            producto["precio"] = precio
+            producto["precio_verificado"] = True
+            producto["precio_fuente"] = "catalogo_item_exacto"
+            print(
+                "PRECIO CATÁLOGO CORREGIDO:",
+                item_id, "| v6=", anterior, "| exacto=", precio
+            )
+            return producto
+
+        print(
+            "AVISO precio catálogo: no apareció",
+            item_id, "dentro de", product_id, "| se conserva precio v6"
+        )
+        return producto
+
+    except Exception as e:
+        print("AVISO precio catálogo:", e, "| se conserva precio v6")
+        return producto
+
+
 def obtener_productos_base():
     """
     TANDA NORMAL ESTABLE.
@@ -2520,6 +2608,7 @@ def main():
 
     # 2) TANDA NORMAL: siempre 10 NUEVOS; nunca completa con repetidos.
     productos = obtener_productos_base()
+    productos = [corregir_precio_catalogo_si_corresponde(p) for p in productos]
     if len(productos) != CANTIDAD_PRODUCTOS:
         raise RuntimeError(
             f"La tanda normal debe tener {CANTIDAD_PRODUCTOS} productos nuevos; "
