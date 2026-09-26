@@ -1895,30 +1895,28 @@ def _extraer_productos_pagina_generica(url_pagina, limite=80):
 
 def convertir_a_publicacion_exacta(producto):
     """
-    Convierte cualquier enlace de catálogo /p/ en un enlace directo al ITEM_ID
-    que YA fue extraído junto con precio/título/imagen del mismo resultado.
+    Conserva la URL REAL que Mercado Libre publicó en la tarjeta y que ya fue
+    fijada al item_id por _url_exacta_con_item().
 
-    No consulta /sale_price ni /products, por lo que no depende de endpoints 403.
-    La regla pasa a ser:
-        ITEM_ID del resultado -> precio del mismo resultado -> imagen del mismo
-        resultado -> enlace directo a ese mismo ITEM_ID.
+    IMPORTANTE:
+    - NO fabrica una URL articulo.mercadolibre.com.ar a partir del item_id.
+    - Los productos de catálogo /p/MLA... deben conservar su URL de catálogo,
+      porque el Generador de Links de Afiliados acepta esa URL real.
+    - Solo valida que haya item_id y URL, y vuelve a fijar item_id/wid para
+      mantener asociada la oferta exacta.
     """
     item_id = limpiar_texto(producto.get("item_id", "")).upper()
     if not re.fullmatch(r"MLA\d{7,}", item_id):
-        raise RuntimeError("No se puede construir publicación exacta: item_id inválido")
+        raise RuntimeError("No se puede conservar publicación exacta: item_id inválido")
 
-    titulo = limpiar_texto(producto.get("nombre", "producto"))
-    slug = unicodedata.normalize("NFKD", titulo)
-    slug = "".join(c for c in slug if not unicodedata.combining(c))
-    slug = slug.lower()
-    slug = re.sub(r"[^a-z0-9]+", "-", slug).strip("-")
-    slug = slug[:120].strip("-") or "producto"
+    url_actual = limpiar_url(producto.get("url_original", ""))
+    if not url_actual:
+        raise RuntimeError("No se puede conservar publicación exacta: URL ausente")
 
-    numero = item_id[3:]
-    enlace_exacto = (
-        f"https://articulo.mercadolibre.com.ar/"
-        f"MLA-{numero}-{slug}-_JM"
-    )
+    # La URL ya viene de la tarjeta real de Mercado Libre.
+    # Para catálogo /p/MLA... conserva ese path y fija la publicación exacta.
+    # Para una publicación clásica /MLA-... también conserva el path real.
+    enlace_exacto = _url_exacta_con_item(url_actual, item_id)
 
     producto["url_original"] = enlace_exacto
     producto["precio_verificado"] = True
@@ -1931,7 +1929,6 @@ def convertir_a_publicacion_exacta(producto):
         "| link=", enlace_exacto,
     )
     return producto
-
 
 def obtener_productos_base():
     """
