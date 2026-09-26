@@ -1838,133 +1838,22 @@ def _extraer_productos_pagina_generica(url_pagina, limite=80):
     return encontrados
 
 
-
-def _token_ml_disponible():
-    """
-    Busca un token ya disponible en GitHub Actions sin exigir cambiar el workflow.
-    Si no existe, la consulta pública /items/{ITEM_ID} sigue funcionando como respaldo.
-    """
-    for nombre in (
-        "MELI_ACCESS_TOKEN",
-        "ML_ACCESS_TOKEN",
-        "MERCADOLIBRE_ACCESS_TOKEN",
-        "MERCADO_LIBRE_ACCESS_TOKEN",
-        "ACCESS_TOKEN",
-    ):
-        valor = limpiar_texto(os.getenv(nombre, ""))
-        if valor:
-            return valor
-    return ""
-
-
-def _precio_numero_a_texto(valor):
-    """Convierte un importe numérico de la API al formato que ya usa el bot."""
-    try:
-        numero = float(valor)
-    except (TypeError, ValueError):
-        return ""
-
-    if numero <= 0:
-        return ""
-
-    if abs(numero - round(numero)) < 0.000001:
-        return f"$ {int(round(numero)):,}".replace(",", ".")
-
-    entero = int(numero)
-    centavos = int(round((numero - entero) * 100))
-    return f"$ {entero:,},{centavos:02d}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-
-def obtener_precio_exacto_item_api(item_id):
-    """
-    Obtiene el precio DEL ITEM MLA EXACTO.
-
-    Prioridad:
-    1) /items/{ITEM_ID}/sale_price con token: Mercado Libre lo documenta como
-       el precio de venta ganador que se muestra al comprador.
-    2) /items/{ITEM_ID}: respaldo por item exacto cuando sale_price no está
-       disponible para el runner/token.
-
-    Nunca consulta /products/{catalog_product_id} ni usa lowPrice/'desde'.
-    """
-    item_id = limpiar_texto(item_id).upper()
-    if not re.fullmatch(r"MLA\d{7,}", item_id):
-        return ""
-
-    token = _token_ml_disponible()
-    headers = dict(HEADERS)
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-        try:
-            r = requests.get(
-                f"https://api.mercadolibre.com/items/{item_id}/sale_price",
-                headers=headers,
-                params={"context": "channel_marketplace"},
-                timeout=20,
-            )
-            if r.status_code == 200:
-                data = r.json()
-                # La respuesta puede exponer amount directamente o dentro
-                # de una estructura de precio según la evolución de la API.
-                candidatos = [
-                    data.get("amount"),
-                    data.get("price"),
-                ]
-                if isinstance(data.get("sale_price"), dict):
-                    candidatos.append(data["sale_price"].get("amount"))
-                for valor in candidatos:
-                    precio = _precio_numero_a_texto(valor)
-                    if precio:
-                        print("PRECIO API sale_price:", item_id, "|", precio)
-                        return precio
-            else:
-                print("AVISO sale_price:", item_id, "| HTTP", r.status_code)
-        except Exception as e:
-            print("AVISO sale_price:", item_id, "|", e)
-
-    # Respaldo: consulta el ITEM exacto, no el producto de catálogo.
-    try:
-        r = requests.get(
-            f"https://api.mercadolibre.com/items/{item_id}",
-            headers=headers,
-            timeout=20,
-        )
-        if r.status_code == 200:
-            data = r.json()
-            if limpiar_texto(data.get("id", "")).upper() != item_id:
-                return ""
-
-            # Mientras Mercado Libre mantenga estos campos en /items, sirven
-            # como respaldo exacto del item. No usamos original_price.
-            for campo in ("price", "base_price"):
-                precio = _precio_numero_a_texto(data.get(campo))
-                if precio:
-                    print("PRECIO API item:", item_id, "|", precio)
-                    return precio
-        else:
-            print("AVISO API item:", item_id, "| HTTP", r.status_code)
-    except Exception as e:
-        print("AVISO API item:", item_id, "|", e)
-
-    return ""
-
-
 def obtener_productos_base():
     """
-    Versión estable: conserva la búsqueda que ya generaba 10 productos.
+    TANDA NORMAL ESTABLE.
 
-    ÚNICO CAMBIO FUNCIONAL:
-    el precio del listado NO se publica directamente. Para cada MLA encontrado,
-    se consulta la API del ITEM exacto y ese precio reemplaza al del listado.
+    Mercado Libre no expone de forma fiable el precio de la publicación
+    individual al runner de GitHub. Por eso NO se vuelve a abrir la publicación
+    para verificar el precio.
 
-    Así:
-      - no usamos el 'desde' del catálogo;
-      - no dependemos de leer HTML de la página individual;
-      - no descartamos páginas catálogo por existir varias opciones;
-      - el precio queda asociado al MLA exacto de esa oferta.
+    Se acepta únicamente un registro completo extraído de UN MISMO resultado:
+    item_id + enlace + título + precio + imagen.
+
+    Además se descartan tarjetas cuyo contexto indique explícitamente que el
+    importe es un precio mínimo de catálogo ('desde', 'más opciones desde',
+    'productos nuevos desde'). Nunca se sustituye por lowPrice.
     """
-    print("--- BUSCANDO 10 PRODUCTOS NUEVOS CON PRECIO DEL ITEM EXACTO ---")
+    print("--- BUSCANDO 10 PRODUCTOS NUEVOS, ATÓMICOS Y SIN PRECIO 'DESDE' ---")
     historial = cargar_historial_publicados()
     print("Publicaciones ya usadas en el historial:", len(historial))
 
@@ -1985,10 +1874,8 @@ def obtener_productos_base():
             continue
 
         for item_id, producto in encontrados.items():
-            if len(nuevos) >= CANTIDAD_PRODUCTOS:
-                break
-
             item_id = limpiar_texto(item_id).upper()
+
             if item_id in historial or item_id in nuevos:
                 continue
             if not re.fullmatch(r"MLA\d{7,}", item_id):
@@ -2000,52 +1887,68 @@ def obtener_productos_base():
             nombre = limpiar_texto(producto.get("nombre", ""))
             enlace = limpiar_texto(producto.get("url_original", ""))
             imagen = limpiar_texto(producto.get("imagen_url", ""))
+            precio = limpiar_texto(producto.get("precio", ""))
 
             if not nombre or not enlace or not imagen:
                 continue
+            if not precio or precio == "Precio no disponible":
+                continue
 
-            # Mantiene la validación item/link que ya funcionó en v6.
+            # El item de la URL debe ser el mismo item del registro.
             item_url = extraer_item_id_url(enlace)
             if item_url and item_url != item_id:
                 print("DESCARTADO: item/link no coinciden:", item_id, "|", item_url)
                 continue
 
-            # CORRECCIÓN DE PRECIO: consulta el MLA exacto.
-            precio_listado = limpiar_texto(producto.get("precio", ""))
-            precio_exacto = obtener_precio_exacto_item_api(item_id)
-
-            if not precio_exacto:
-                print(
-                    "DESCARTADO: API no devolvió precio para item exacto:",
-                    item_id, "|", nombre
+            # Si el extractor dejó contexto textual de la tarjeta, rechazamos
+            # explícitamente precios mínimos de catálogo.
+            contexto = " ".join(
+                limpiar_texto(producto.get(k, ""))
+                for k in (
+                    "texto_tarjeta", "texto_contexto", "contexto_precio",
+                    "leyenda_precio", "price_context", "price_label"
                 )
+            ).lower()
+
+            if any(frase in contexto for frase in (
+                "más opciones desde",
+                "mas opciones desde",
+                "productos nuevos desde",
+                "opciones desde",
+                "precio desde",
+            )):
+                print("DESCARTADO: precio 'desde' de catálogo:", item_id, "|", nombre)
                 continue
 
+            # Marcamos verificado en el sentido correcto para esta arquitectura:
+            # los cuatro datos proceden del mismo registro atómico del listado.
             producto["item_id"] = item_id
             producto["nombre"] = nombre
             producto["url_original"] = enlace
             producto["imagen_url"] = imagen
-            producto["precio_listado_original"] = precio_listado
-            producto["precio"] = precio_exacto
+            producto["precio"] = precio
             producto["precio_verificado"] = True
-            producto["precio_fuente"] = "api_item_exacto"
+            producto["precio_fuente"] = "mismo_resultado_listado"
+
+            # Las características no son críticas para la correspondencia.
             producto["atributos_visuales"] = atributos_desde_titulo(nombre)
 
             nuevos[item_id] = producto
             print(
-                f"NUEVO {len(nuevos)}:",
-                item_id, "|", nombre,
-                "| listado=", precio_listado,
-                "| ITEM EXACTO=", precio_exacto
+                f"NUEVO ATÓMICO {len(nuevos)}:",
+                item_id, "|", nombre, "| precio=", precio
             )
 
-        print("Nuevos con precio exacto acumulados:", len(nuevos))
+            if len(nuevos) >= CANTIDAD_PRODUCTOS:
+                break
+
+        print("Nuevos atómicos acumulados:", len(nuevos))
 
     if len(nuevos) < CANTIDAD_PRODUCTOS:
         raise RuntimeError(
-            f"Solo se consiguieron {len(nuevos)} productos nuevos con precio del "
-            f"item exacto y se necesitan {CANTIDAD_PRODUCTOS}. No se publicará "
-            "un precio de catálogo 'desde' como si fuera el precio del item."
+            f"Solo se consiguieron {len(nuevos)} productos nuevos completos y "
+            f"se necesitan {CANTIDAD_PRODUCTOS}. No se usarán repetidos ni "
+            "registros incompletos."
         )
 
     candidatos = list(nuevos.values())
