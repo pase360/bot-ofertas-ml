@@ -1838,8 +1838,107 @@ def _urls_fuentes_ampliadas():
     return urls
 
 
+def _urls_paginacion_generica(soup, url_actual, max_urls=8):
+    """
+    Descubre PAGINAS REALES de la misma búsqueda leyendo los enlaces de
+    paginación que Mercado Libre incluyó en el HTML. No inventa URLs.
+
+    Acepta tanto la paginación clásica (_Desde_49...) como variantes con
+    parámetros (?page=2, offset=..., etc.) siempre que el enlace esté dentro
+    del bloque de paginación o esté marcado como "Siguiente".
+    """
+    if not soup or not url_actual:
+        return []
+
+    base = urlsplit(url_actual)
+    host_base = base.netloc.lower()
+    path_actual = base.path.rstrip("/") or "/"
+    # Si ya estamos en una página _Desde_N, recupera la raíz de la búsqueda.
+    path_raiz = re.sub(r"_Desde_\d+.*$", "", path_actual, flags=re.IGNORECASE)
+
+    candidatos = []
+    vistos = set()
+
+    for enlace in soup.find_all("a", href=True):
+        href = limpiar_texto(enlace.get("href", ""))
+        if not href:
+            continue
+
+        clases = " ".join(enlace.get("class", []))
+        titulo = limpiar_texto(enlace.get("title", ""))
+        aria = limpiar_texto(enlace.get("aria-label", ""))
+        texto = limpiar_texto(enlace.get_text(" ", strip=True))
+
+        padre = enlace.parent if isinstance(enlace.parent, Tag) else None
+        clases_padre = " ".join(padre.get("class", [])) if padre else ""
+        abuelo = padre.parent if padre and isinstance(padre.parent, Tag) else None
+        clases_abuelo = " ".join(abuelo.get("class", [])) if abuelo else ""
+
+        marca = " ".join([
+            clases, clases_padre, clases_abuelo, titulo, aria, texto, href
+        ]).lower()
+
+        es_paginacion = (
+            "pagination" in marca
+            or "paginación" in marca
+            or "paginacion" in marca
+            or "siguiente" in marca
+            or "_desde_" in href.lower()
+            or re.search(r"(?:[?&])(page|offset|from|start)=\d+", href, re.IGNORECASE)
+        )
+        if not es_paginacion:
+            continue
+
+        # Nunca volvemos hacia atrás si el enlace lo indica explícitamente.
+        if "anterior" in marca or "previous" in marca:
+            continue
+
+        absoluta = limpiar_url(urljoin(url_actual, href))
+        if not absoluta or absoluta == limpiar_url(url_actual):
+            continue
+
+        partes = urlsplit(absoluta)
+        host = partes.netloc.lower()
+        if host != host_base:
+            continue
+
+        path = partes.path.rstrip("/") or "/"
+        # Debe seguir perteneciendo a la misma búsqueda/sección.
+        if path_raiz != "/":
+            misma_raiz = (
+                path == path_raiz
+                or path.startswith(path_raiz + "_")
+                or path.startswith(path_raiz + "/")
+            )
+            if not misma_raiz:
+                continue
+
+        limpia = urlunsplit((partes.scheme or base.scheme or "https", host, partes.path, partes.query, ""))
+        if limpia in vistos:
+            continue
+        vistos.add(limpia)
+        candidatos.append(limpia)
+
+    def clave_pagina(url):
+        u = requests.utils.unquote(url)
+        m = re.search(r"_Desde_(\d+)", u, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+        q = dict(parse_qsl(urlsplit(u).query, keep_blank_values=True))
+        for k in ("page", "offset", "from", "start"):
+            try:
+                if k in q:
+                    return int(q[k])
+            except Exception:
+                pass
+        return 10**9
+
+    candidatos.sort(key=clave_pagina)
+    return candidatos[:max_urls]
+
+
 def _extraer_productos_pagina_generica(url_pagina, limite=80):
-    """Extrae publicaciones válidas de una página pública de ML."""
+    """Extrae publicaciones válidas y devuelve también su paginación real."""
     response = safe_get(url_pagina, timeout=30)
     print("HTTP fuente:", response.status_code, "|", url_pagina)
     soup = BeautifulSoup(response.text, "html.parser")
@@ -1889,7 +1988,10 @@ def _extraer_productos_pagina_generica(url_pagina, limite=80):
         if len(encontrados) >= limite:
             break
 
-    return encontrados
+    paginas = _urls_paginacion_generica(soup, url_pagina)
+    if paginas:
+        print("Páginas reales descubiertas:", len(paginas), "|", url_pagina)
+    return encontrados, paginas
 
 
 
@@ -2051,37 +2153,57 @@ def _seleccionar_tanda_diversa(candidatos, cantidad):
 
 def obtener_productos_base():
     """
-    TANDA NORMAL ESTABLE Y DIVERSA.
+    TANDA NORMAL ESTABLE, DIVERSA Y CON BÚSQUEDA PROFUNDA.
 
-    Primero reúne un POOL amplio de productos válidos usando exactamente las
-    mismas validaciones de item/link/precio/imagen que ya funcionaban. Después
-    elige 10 procurando variedad de rubros. La diversidad es una preferencia,
-    nunca una condición que pueda dejar la tanda incompleta.
+    Reglas que NO se negocian:
+    - historial intacto: jamás reutiliza un item ya publicado/generado;
+    - precio, link e imagen deben pertenecer al mismo registro válido;
+    - no se inventan URLs de producto ni URLs de paginación;
+    - si una fuente funciona, sigue sus páginas REALES antes de abandonarla;
+    - la variedad se aplica al final y nunca impide completar 10.
     """
-    print("--- BUSCANDO PRODUCTOS NUEVOS, ATÓMICOS, SIN PRECIO 'DESDE' Y CON VARIEDAD ---")
+    print("--- BUSCANDO 10 PRODUCTOS NUEVOS CON PAGINACIÓN REAL Y VARIEDAD ---")
     historial = cargar_historial_publicados()
     print("Publicaciones ya usadas en el historial:", len(historial))
 
     nuevos = {}
     fuentes = _urls_fuentes_ampliadas()
 
-    # Importante: no limitar a 1 por fuente. Actualmente Mercado Libre puede
-    # exponer item_id utilizable solo en algunas fuentes. Reunimos varios de la
-    # fuente que funcione y diversificamos AL FINAL.
-    OBJETIVO_POOL = max(CANTIDAD_PRODUCTOS * 6, CANTIDAD_PRODUCTOS)
+    # Reúne suficientes candidatos para poder variar la tanda. Si no llega a
+    # este pool pero sí alcanza 10, igualmente podrá publicar 10 válidos.
+    OBJETIVO_POOL = max(CANTIDAD_PRODUCTOS * 3, CANTIDAD_PRODUCTOS)
+    MAX_URLS_PROCESADAS = 180
+    MAX_PAGINAS_POR_FUENTE = 8
 
-    for url_pagina in fuentes:
+    # cola: (url_a_visitar, fuente_raiz, profundidad)
+    cola = deque((url, url, 0) for url in fuentes)
+    visitadas = set()
+    paginas_por_fuente = {}
+    urls_procesadas = 0
+
+    while cola and urls_procesadas < MAX_URLS_PROCESADAS:
         if len(nuevos) >= OBJETIVO_POOL:
             break
 
+        url_pagina, fuente_raiz, profundidad = cola.popleft()
+        url_pagina = limpiar_url(url_pagina)
+        if not url_pagina or url_pagina in visitadas:
+            continue
+
+        visitadas.add(url_pagina)
+        urls_procesadas += 1
+
         try:
             if _es_url_mas_vendidos_general(url_pagina):
-                encontrados, _ = _extraer_productos_de_mas_vendidos(url_pagina)
+                encontrados, paginas = _extraer_productos_de_mas_vendidos(url_pagina)
             else:
-                encontrados = _extraer_productos_pagina_generica(url_pagina)
+                encontrados, paginas = _extraer_productos_pagina_generica(url_pagina)
         except Exception as e:
             print("AVISO fuente:", url_pagina, "|", e)
             continue
+
+        cantidad_fuente = len(encontrados)
+        agregados_esta_pagina = 0
 
         for item_id, producto in encontrados.items():
             item_id = limpiar_texto(item_id).upper()
@@ -2134,6 +2256,7 @@ def obtener_productos_base():
             producto["atributos_visuales"] = atributos_desde_titulo(nombre)
 
             nuevos[item_id] = producto
+            agregados_esta_pagina += 1
             print(
                 f"CANDIDATO VÁLIDO {len(nuevos)}:",
                 item_id, "|", _categoria_para_diversidad(producto), "|",
@@ -2143,12 +2266,35 @@ def obtener_productos_base():
             if len(nuevos) >= OBJETIVO_POOL:
                 break
 
-        print("Candidatos válidos acumulados:", len(nuevos))
+        print(
+            "Candidatos válidos acumulados:", len(nuevos),
+            "| encontrados en página:", cantidad_fuente,
+            "| nuevos agregados:", agregados_esta_pagina,
+        )
+
+        # CLAVE: si una fuente devuelve productos válidos (aunque todos estén
+        # en historial), profundizamos en sus páginas reales para encontrar
+        # productos nuevos antes de seguir recorriendo cientos de búsquedas.
+        if cantidad_fuente > 0 and paginas and len(nuevos) < OBJETIVO_POOL:
+            usados = paginas_por_fuente.get(fuente_raiz, 0)
+            cupo = max(0, MAX_PAGINAS_POR_FUENTE - usados)
+            nuevas_paginas = [p for p in paginas if p not in visitadas][:cupo]
+            if nuevas_paginas:
+                paginas_por_fuente[fuente_raiz] = usados + len(nuevas_paginas)
+                # Prioriza inmediatamente las páginas de la fuente que sí dio
+                # resultados. reversed + appendleft conserva el orden natural.
+                for pagina in reversed(nuevas_paginas):
+                    cola.appendleft((pagina, fuente_raiz, profundidad + 1))
+                print(
+                    "Profundizando fuente productiva:", fuente_raiz,
+                    "| páginas añadidas:", len(nuevas_paginas)
+                )
 
     if len(nuevos) < CANTIDAD_PRODUCTOS:
         raise RuntimeError(
-            f"Solo se consiguieron {len(nuevos)} productos nuevos completos y "
-            f"se necesitan {CANTIDAD_PRODUCTOS}. No se usarán repetidos ni registros incompletos."
+            f"Solo se consiguieron {len(nuevos)} productos nuevos completos tras "
+            f"revisar {urls_procesadas} páginas reales. Se necesitan "
+            f"{CANTIDAD_PRODUCTOS}. El historial NO fue borrado ni se usaron repetidos."
         )
 
     candidatos = list(nuevos.values())
@@ -2161,6 +2307,7 @@ def obtener_productos_base():
         )
 
     return elegidos
+
 
 def _leer_demanda_pendiente():
     """Lee necesidades detectadas sin volver a procesar la misma línea."""
