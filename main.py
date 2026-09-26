@@ -1869,27 +1869,62 @@ def _extraer_productos_pagina_generica(url_pagina, limite=80):
 
 
 
-def aplicar_precio_venta_ml(producto):
-    """Corrige solo el precio después de que v11 ya encontró el producto."""
-    item_id = limpiar_texto(producto.get("item_id", "")).upper()
-    token = limpiar_texto(os.getenv("MELI_ACCESS_TOKEN", ""))
-    if not item_id or not token:
-        return producto
-
+def corregir_precio_catalogo_desde_producto(producto):
+    """
+    Solo actúa si el link es una página de catálogo /p/MLA...
+    Consulta /products/{PRODUCT_ID} y usa buy_box_winner.price, que corresponde
+    a la publicación ganadora de esa PDP. Si no puede obtenerlo, deja intacto
+    el precio original de v11 y nunca rompe la tanda.
+    """
     try:
+        enlace = limpiar_texto(producto.get("url_original", ""))
+        if not enlace:
+            return producto
+
+        parsed = urlsplit(enlace)
+        m = re.search(r"/p/(MLA\d+)", parsed.path, re.I)
+        if not m:
+            return producto
+
+        product_id = m.group(1).upper()
+        token = limpiar_texto(os.getenv("MELI_ACCESS_TOKEN", ""))
+
+        headers = dict(HEADERS)
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
         r = requests.get(
-            f"https://api.mercadolibre.com/items/{item_id}/sale_price",
-            headers={"Authorization": f"Bearer {token}"},
-            params={"context": "channel_marketplace"},
+            f"https://api.mercadolibre.com/products/{product_id}",
+            headers=headers,
             timeout=20,
         )
+
+        # Si la app no tiene permiso para este recurso con token, probamos la
+        # representación pública de la PDP sin Authorization.
+        if r.status_code in (401, 403):
+            r = requests.get(
+                f"https://api.mercadolibre.com/products/{product_id}",
+                headers=HEADERS,
+                timeout=20,
+            )
+
         if r.status_code != 200:
-            print("AVISO sale_price", item_id, "HTTP", r.status_code, "- conserva precio v11")
+            print("AVISO PRODUCT PDP:", product_id, "HTTP", r.status_code,
+                  "- conserva precio v11")
             return producto
 
-        amount = r.json().get("amount")
+        data = r.json()
+        winner = data.get("buy_box_winner")
+        if not isinstance(winner, dict):
+            print("AVISO PRODUCT PDP:", product_id,
+                  "sin buy_box_winner - conserva precio v11")
+            return producto
+
+        amount = winner.get("price")
+        winner_item = limpiar_texto(winner.get("item_id", "")).upper()
         if amount is None:
             return producto
+
         numero = float(amount)
         if numero <= 0:
             return producto
@@ -1905,11 +1940,17 @@ def aplicar_precio_venta_ml(producto):
         anterior = limpiar_texto(producto.get("precio", ""))
         producto["precio"] = precio
         producto["precio_verificado"] = True
-        producto["precio_fuente"] = "meli_sale_price"
-        print("PRECIO ML:", item_id, "| anterior=", anterior, "| venta=", precio)
+        producto["precio_fuente"] = "buy_box_winner"
+        producto["winner_item_id"] = winner_item
+
+        print("PRECIO PDP:", product_id,
+              "| ganador=", winner_item,
+              "| anterior=", anterior,
+              "| visible=", precio)
         return producto
+
     except Exception as e:
-        print("AVISO sale_price", item_id, "|", e, "- conserva precio v11")
+        print("AVISO PRODUCT PDP:", e, "- conserva precio v11")
         return producto
 
 
@@ -2595,7 +2636,7 @@ def main():
 
     # 2) TANDA NORMAL: siempre 10 NUEVOS; nunca completa con repetidos.
     productos = obtener_productos_base()
-    productos = [aplicar_precio_venta_ml(p) for p in productos]
+    productos = [corregir_precio_catalogo_desde_producto(p) for p in productos]
     if len(productos) != CANTIDAD_PRODUCTOS:
         raise RuntimeError(
             f"La tanda normal debe tener {CANTIDAD_PRODUCTOS} productos nuevos; "
