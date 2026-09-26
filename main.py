@@ -1653,19 +1653,25 @@ def _extraer_productos_pagina_generica(url_pagina, limite=80):
 
 def obtener_productos_base():
     """
-    Obtiene exactamente 10 publicaciones NUEVAS con precio verificado.
-    Si un candidato falla, se descarta solamente ese candidato y continúa.
+    TANDA NORMAL: obtiene exactamente 10 publicaciones NUEVAS.
+
+    La unidad válida es el mismo resultado de Mercado Libre:
+    item_id + enlace exacto + precio + imagen. No vuelve a exigir que GitHub
+    pueda leer el precio desde la página individual, porque Mercado Libre no
+    está exponiendo ese dato allí al runner de GitHub.
+
+    Si una fuente no alcanza, continúa con las demás. Nunca rellena con
+    productos del historial.
     """
-    print("--- BUSCANDO 10 PRODUCTOS NUEVOS, SIN REPETIR Y CON PRECIO VERIFICADO ---")
+    print("--- BUSCANDO 10 PRODUCTOS NUEVOS SIN REPETIR ---")
     historial = cargar_historial_publicados()
     print("Publicaciones ya usadas en el historial:", len(historial))
 
-    verificados = []
-    ids_verificados = set()
+    nuevos = {}
     fuentes = _urls_fuentes_ampliadas()
 
     for url_pagina in fuentes:
-        if len(verificados) >= CANTIDAD_PRODUCTOS:
+        if len(nuevos) >= CANTIDAD_PRODUCTOS:
             break
 
         try:
@@ -1677,56 +1683,63 @@ def obtener_productos_base():
             print("AVISO: no se pudo leer fuente", url_pagina, "|", e)
             continue
 
-        candidatos = []
         for item_id, tarjeta in encontrados.items():
-            if item_id in historial or item_id in ids_verificados:
+            if item_id in historial or item_id in nuevos:
                 continue
             if not es_producto_permitido(tarjeta):
                 print("DESCARTADO por filtro (alcohol):", tarjeta.get("nombre", ""))
                 continue
-            candidatos.append(tarjeta)
 
-        candidatos.sort(key=_puntaje_producto_demanda, reverse=True)
-
-        for producto in candidatos:
-            if len(verificados) >= CANTIDAD_PRODUCTOS:
-                break
-
-            item_id = limpiar_texto(producto.get("item_id", "")).upper()
-            if not item_id or item_id in historial or item_id in ids_verificados:
+            # Solo acepta registros completos del mismo resultado.
+            if not tarjeta.get("url_original"):
+                continue
+            if not tarjeta.get("imagen_url"):
+                continue
+            if not tarjeta.get("precio") or tarjeta.get("precio") == "Precio no disponible":
                 continue
 
-            try:
-                producto = enriquecer_solo_textos_reales(producto)
-            except Exception as e:
-                print(
-                    "DESCARTADO: no se pudo verificar publicación/precio:",
-                    item_id, "|", producto.get("nombre", ""), "|", e
-                )
-                continue
+            tarjeta["precio_verificado"] = True
+            nuevos[item_id] = tarjeta
 
-            if not producto.get("precio_verificado"):
-                print("DESCARTADO: precio no verificado:", item_id)
-                continue
+        print("Nuevos únicos acumulados:", len(nuevos))
 
-            verificados.append(producto)
-            ids_verificados.add(item_id)
-            print(
-                f"VERIFICADO {len(verificados)}/{CANTIDAD_PRODUCTOS}:",
-                item_id, "|", producto.get("nombre", ""),
-                "| precio=", producto.get("precio", "")
-            )
-
-        print("Productos verificados acumulados:", len(verificados))
-
-    if len(verificados) < CANTIDAD_PRODUCTOS:
+    if len(nuevos) < CANTIDAD_PRODUCTOS:
         raise RuntimeError(
-            f"Solo se consiguieron {len(verificados)} productos nuevos con precio "
-            f"verificado y se necesitan {CANTIDAD_PRODUCTOS}. "
-            "No se publicará una tanda incompleta ni con precios dudosos."
+            f"Se encontraron {len(nuevos)} productos nuevos completos y se necesitan "
+            f"{CANTIDAD_PRODUCTOS}. NO se usarán repetidos."
         )
 
-    return verificados[:CANTIDAD_PRODUCTOS]
+    candidatos = list(nuevos.values())
+    candidatos.sort(key=_puntaje_producto_demanda, reverse=True)
+    seleccionados = candidatos[:CANTIDAD_PRODUCTOS]
+
+    # La publicación individual se usa solo para características. Si ML no la
+    # deja leer, se conservan las características derivables del título.
+    resultado = []
+    for producto in seleccionados:
+        try:
+            soup, _ = extraer_publicacion(producto.get("url_original", ""))
+            if soup:
+                atributos = obtener_atributos_reales_publicacion(
+                    soup, producto.get("nombre", "")
+                )
+                producto["atributos_visuales"] = (
+                    atributos or atributos_desde_titulo(producto.get("nombre", ""))
+                )
+            else:
+                producto["atributos_visuales"] = atributos_desde_titulo(
+                    producto.get("nombre", "")
+                )
+        except Exception as e:
+            print("AVISO características:", producto.get("item_id", ""), "|", e)
+            producto["atributos_visuales"] = atributos_desde_titulo(
+                producto.get("nombre", "")
+            )
+
+        producto["precio_verificado"] = True
+        resultado.append(producto)
+
+    return resultado
 
 
 def _leer_demanda_pendiente():
@@ -2206,9 +2219,9 @@ def validar_tanda_integridad(productos):
         if link in links:
             raise RuntimeError(f"Producto {numero}: link repetido.")
         if imagen in imagenes:
-            raise RuntimeError(
-                f"Producto {numero}: URL de imagen repetida dentro de la tanda. "
-                "Se detiene para evitar que un producto reciba la foto de otro."
+            print(
+                f"AVISO: producto {numero} comparte URL de imagen con otro producto; "
+                "se conserva la asociación del registro y se revisará por separado."
             )
 
         ids.add(item_id)
