@@ -177,19 +177,29 @@ def nombre_desde_url(url):
 
 PALABRAS_ALCOHOL = (
     "cerveza", "beer", "vino", "wine", "fernet", "whisky", "whiskey",
-    "vodka", "gin ", "ginebra", "ron ", "rum ", "tequila", "champagne",
-    "espumante", "licor", "aperitivo alcoh", "sidra", "cognac", "coñac",
-    "brandy", "vermouth", "vermú", "campari", "aperol", "heineken",
-    "quilmes", "brahma", "stella artois", "corona", "budweiser"
+    "vodka", "gin", "ginebra", "ron", "rum", "tequila", "champagne",
+    "espumante", "licor", "aperitivo alcoholico", "aperitivo alcohólico",
+    "sidra", "cognac", "coñac", "brandy", "vermouth", "vermú",
+    "campari", "aperol", "heineken", "quilmes", "brahma",
+    "stella artois", "corona", "budweiser"
 )
 
+
 def es_producto_permitido(producto):
-    """Excluye alcohol de cualquier fuente antes de seleccionar/publicar."""
+    """Excluye alcohol comparando palabras/frases completas."""
     texto = " ".join([
         limpiar_texto(producto.get("nombre", "")),
         limpiar_texto(producto.get("url_original", "")),
     ]).lower()
-    return not any(palabra in texto for palabra in PALABRAS_ALCOHOL)
+
+    texto = re.sub(r"[^a-záéíóúüñ0-9]+", " ", texto)
+    texto = " " + re.sub(r"\s+", " ", texto).strip() + " "
+
+    for palabra in PALABRAS_ALCOHOL:
+        p = re.sub(r"[^a-záéíóúüñ0-9]+", " ", palabra.lower()).strip()
+        if p and f" {p} " in texto:
+            return False
+    return True
 
 
 def safe_get(url, timeout=30):
@@ -1643,20 +1653,21 @@ def _extraer_productos_pagina_generica(url_pagina, limite=80):
 
 def obtener_productos_base():
     """
-    TANDA NORMAL: obtiene exactamente 10 publicaciones NUEVAS.
-    Nunca rellena con productos del historial. Si una fuente no alcanza,
-    continúa con otras fuentes públicas de Mercado Libre.
+    Obtiene exactamente 10 publicaciones NUEVAS con precio verificado.
+    Si un candidato falla, se descarta solamente ese candidato y continúa.
     """
-    print("--- BUSCANDO 10 PRODUCTOS NUEVOS SIN REPETIR ---")
+    print("--- BUSCANDO 10 PRODUCTOS NUEVOS, SIN REPETIR Y CON PRECIO VERIFICADO ---")
     historial = cargar_historial_publicados()
     print("Publicaciones ya usadas en el historial:", len(historial))
 
-    nuevos = {}
+    verificados = []
+    ids_verificados = set()
     fuentes = _urls_fuentes_ampliadas()
 
     for url_pagina in fuentes:
-        if len(nuevos) >= CANTIDAD_PRODUCTOS:
+        if len(verificados) >= CANTIDAD_PRODUCTOS:
             break
+
         try:
             if _es_url_mas_vendidos_general(url_pagina):
                 encontrados, _ = _extraer_productos_de_mas_vendidos(url_pagina)
@@ -1666,40 +1677,57 @@ def obtener_productos_base():
             print("AVISO: no se pudo leer fuente", url_pagina, "|", e)
             continue
 
+        candidatos = []
         for item_id, tarjeta in encontrados.items():
-            if item_id in historial or item_id in nuevos:
+            if item_id in historial or item_id in ids_verificados:
                 continue
             if not es_producto_permitido(tarjeta):
                 print("DESCARTADO por filtro (alcohol):", tarjeta.get("nombre", ""))
                 continue
-            nuevos[item_id] = tarjeta
+            candidatos.append(tarjeta)
 
-        print("Nuevos únicos acumulados:", len(nuevos))
+        candidatos.sort(key=_puntaje_producto_demanda, reverse=True)
 
-    if len(nuevos) < CANTIDAD_PRODUCTOS:
+        for producto in candidatos:
+            if len(verificados) >= CANTIDAD_PRODUCTOS:
+                break
+
+            item_id = limpiar_texto(producto.get("item_id", "")).upper()
+            if not item_id or item_id in historial or item_id in ids_verificados:
+                continue
+
+            try:
+                producto = enriquecer_solo_textos_reales(producto)
+            except Exception as e:
+                print(
+                    "DESCARTADO: no se pudo verificar publicación/precio:",
+                    item_id, "|", producto.get("nombre", ""), "|", e
+                )
+                continue
+
+            if not producto.get("precio_verificado"):
+                print("DESCARTADO: precio no verificado:", item_id)
+                continue
+
+            verificados.append(producto)
+            ids_verificados.add(item_id)
+            print(
+                f"VERIFICADO {len(verificados)}/{CANTIDAD_PRODUCTOS}:",
+                item_id, "|", producto.get("nombre", ""),
+                "| precio=", producto.get("precio", "")
+            )
+
+        print("Productos verificados acumulados:", len(verificados))
+
+    if len(verificados) < CANTIDAD_PRODUCTOS:
         raise RuntimeError(
-            f"Se encontraron {len(nuevos)} productos nuevos y se necesitan "
-            f"{CANTIDAD_PRODUCTOS}. NO se usarán repetidos."
+            f"Solo se consiguieron {len(verificados)} productos nuevos con precio "
+            f"verificado y se necesitan {CANTIDAD_PRODUCTOS}. "
+            "No se publicará una tanda incompleta ni con precios dudosos."
         )
 
-    candidatos = list(nuevos.values())
-    candidatos.sort(key=_puntaje_producto_demanda, reverse=True)
-    seleccionados = candidatos[:CANTIDAD_PRODUCTOS]
+    return verificados[:CANTIDAD_PRODUCTOS]
 
-    resultado = []
-    for numero, producto in enumerate(seleccionados, start=1):
-        print(
-            f"NUEVO {numero}. item={producto['item_id']} | "
-            f"{producto['nombre']} | precio={producto['precio']}"
-        )
-        resultado.append(enriquecer_solo_textos_reales(producto))
-
-    return resultado
-
-
-# =========================================================
-# NUEVO: DEMANDA REAL + BÚSQUEDA DIRECTA EN MERCADO LIBRE
-# =========================================================
 
 def _leer_demanda_pendiente():
     """Lee necesidades detectadas sin volver a procesar la misma línea."""
