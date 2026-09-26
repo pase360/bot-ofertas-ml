@@ -1766,68 +1766,52 @@ def _extraer_productos_de_mas_vendidos(url_pagina):
     return encontrados, _urls_mas_vendidos_misma_seccion(soup, url_pagina)
 
 
-def _urls_fuentes_ampliadas_v6_original():
+def _urls_fuentes_ampliadas():
     """
-    Fuentes públicas para conseguir variedad SIN repetir publicaciones.
-    Primero conserva Más Vendidos y Ofertas. Además usa búsquedas amplias por
-    categorías de alta rotación. El historial manda: un item ya publicado no
-    vuelve a entrar en la tanda normal.
+    Mantiene las fuentes originales de v6 y amplía SOLO la variedad de
+    búsquedas de primera página.
+
+    Motivo: hoy muchas páginas/categorías de ML no están exponiendo item_id
+    utilizable al runner. En vez de paginar una fuente que devuelve 0,
+    consultamos más búsquedas independientes, donde sí pueden aparecer tarjetas
+    con item_id + precio + imagen.
+
+    No cambia historial, extractor, precio, imagen, link ni generación.
     """
     consultas = [
+        # originales v6
         "tecnologia", "celulares", "hogar", "cocina", "herramientas",
         "electrodomesticos", "computacion", "audio", "deportes", "calzado",
         "indumentaria", "belleza", "juguetes", "bebes", "mascotas",
         "accesorios auto", "motos", "jardin", "oficina", "iluminacion",
+
+        # búsquedas adicionales concretas para conseguir IDs nuevos
+        "smart tv", "televisores", "notebook", "tablet", "monitores",
+        "auriculares", "parlantes", "impresoras", "teclados", "mouse",
+        "aires acondicionados", "ventiladores", "calefaccion", "heladeras",
+        "freezer", "microondas", "cafeteras", "licuadoras", "batidoras",
+        "freidoras", "aspiradoras", "lavarropas", "colchones", "muebles",
+        "sillas", "mesas", "placard", "taladros", "amoladoras",
+        "hidrolavadoras", "soldadoras", "compresores", "bicicletas",
+        "cintas caminadoras", "pesas", "zapatillas", "mochilas", "relojes",
+        "perfumes", "cuidado personal", "camaras seguridad", "domotica",
+        "luces led", "baterias auto", "neumaticos", "repuestos auto",
+        "accesorios celular", "cargadores", "power bank", "discos ssd",
+        "memorias ram", "placas de video", "procesadores", "consolas",
+        "gaming", "ofertas hogar", "ofertas tecnologia", "ofertas herramientas",
     ]
+
     urls = [URL_MAS_VENDIDOS, URL_OFERTAS]
-    urls.extend(_url_busqueda_ml(q) for q in consultas)
-    return urls
+    vistos = set(urls)
 
-
-
-
-def _urls_fuentes_ampliadas():
-    """
-    Conserva TODAS las fuentes originales de v6 y agrega páginas siguientes
-    de esas mismas fuentes para que, cuando el historial ya consumió muchos
-    productos, el bot pueda seguir buscando hasta completar 10.
-
-    No cambia filtros, historial, precio, imagen, link ni generación de tanda.
-    """
-    originales = _urls_fuentes_ampliadas_v6_original()
-    salida = []
-    vistos = set()
-
-    def agregar(url):
-        url = limpiar_texto(url)
-        if url and url not in vistos:
+    for consulta in consultas:
+        url = _url_busqueda_ml(consulta)
+        if url not in vistos:
             vistos.add(url)
-            salida.append(url)
+            urls.append(url)
 
-    for url in originales:
-        agregar(url)
-
-    # Mercado Libre usa _Desde_N para paginar listados.
-    # Recorremos resultados adicionales de cada fuente original.
-    for url in originales:
-        try:
-            parsed = urlsplit(url)
-            if "listado.mercadolibre.com.ar" not in parsed.netloc.lower():
-                continue
-
-            base_path = re.sub(r"_Desde_\d+/?$", "", parsed.path, flags=re.I)
-            # páginas 2 a 8: offsets 49, 97, 145...
-            for desde in (49, 97, 145, 193, 241, 289, 337):
-                nueva = parsed._replace(path=f"{base_path}_Desde_{desde}").geturl()
-                agregar(nueva)
-        except Exception:
-            continue
-
-    print(
-        "Fuentes v6:", len(originales),
-        "| fuentes con páginas extra:", len(salida)
-    )
-    return salida
+    print("Fuentes de búsqueda disponibles:", len(urls))
+    return urls
 
 
 def _extraer_productos_pagina_generica(url_pagina, limite=80):
