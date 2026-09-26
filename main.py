@@ -1840,20 +1840,19 @@ def _extraer_productos_pagina_generica(url_pagina, limite=80):
 
 def obtener_productos_base():
     """
-    TANDA NORMAL ESTABLE.
+    TANDA NORMAL: SOLO publicaciones individuales de vendedor.
 
-    Mercado Libre no expone de forma fiable el precio de la publicación
-    individual al runner de GitHub. Por eso NO se vuelve a abrir la publicación
-    para verificar el precio.
+    Regla comercial:
+      publicación individual -> un precio concreto -> una imagen -> un enlace.
 
-    Se acepta únicamente un registro completo extraído de UN MISMO resultado:
-    item_id + enlace + título + precio + imagen.
+    Se DESCARTAN páginas de catálogo/producto con varias opciones de compra.
+    En particular, no se publican URLs cuyo path sea /p/MLA... ni registros
+    donde el item exacto solo aparezca en pdp_filters/wid de una página catálogo.
 
-    Además se descartan tarjetas cuyo contexto indique explícitamente que el
-    importe es un precio mínimo de catálogo ('desde', 'más opciones desde',
-    'productos nuevos desde'). Nunca se sustituye por lowPrice.
+    El precio final sigue siendo el precio extraído del MISMO resultado que
+    contiene la publicación individual.
     """
-    print("--- BUSCANDO 10 PRODUCTOS NUEVOS, ATÓMICOS Y SIN PRECIO 'DESDE' ---")
+    print("--- BUSCANDO 10 PUBLICACIONES INDIVIDUALES DE VENDEDOR ---")
     historial = cargar_historial_publicados()
     print("Publicaciones ya usadas en el historial:", len(historial))
 
@@ -1874,8 +1873,10 @@ def obtener_productos_base():
             continue
 
         for item_id, producto in encontrados.items():
-            item_id = limpiar_texto(item_id).upper()
+            if len(nuevos) >= CANTIDAD_PRODUCTOS:
+                break
 
+            item_id = limpiar_texto(item_id).upper()
             if item_id in historial or item_id in nuevos:
                 continue
             if not re.fullmatch(r"MLA\d{7,}", item_id):
@@ -1894,14 +1895,36 @@ def obtener_productos_base():
             if not precio or precio == "Precio no disponible":
                 continue
 
-            # El item de la URL debe ser el mismo item del registro.
-            item_url = extraer_item_id_url(enlace)
-            if item_url and item_url != item_id:
-                print("DESCARTADO: item/link no coinciden:", item_id, "|", item_url)
+            try:
+                parsed = urlsplit(enlace)
+                path = parsed.path.upper()
+            except Exception:
+                print("DESCARTADO: URL inválida:", item_id, "|", enlace)
                 continue
 
-            # Si el extractor dejó contexto textual de la tarjeta, rechazamos
-            # explícitamente precios mínimos de catálogo.
+            # Mercado Libre catálogo: /p/MLA... => varias opciones de compra.
+            if re.search(r"/P/MLA-?\d+", path):
+                print("DESCARTADO catálogo /p/:", item_id, "|", nombre)
+                continue
+
+            # Exigimos que el MLA individual esté realmente en el path.
+            # Ejemplos aceptados:
+            # /MLA-1234567890-titulo...
+            # /titulo.../MLA1234567890
+            ids_path = [
+                x.replace("-", "")
+                for x in re.findall(r"(MLA-?\d{7,})", path)
+            ]
+
+            if item_id not in ids_path:
+                print(
+                    "DESCARTADO: el link no es publicación individual del item:",
+                    item_id, "|", enlace
+                )
+                continue
+
+            # Evita contextos conocidos de catálogo/precio mínimo si el extractor
+            # los hubiera conservado.
             contexto = " ".join(
                 limpiar_texto(producto.get(k, ""))
                 for k in (
@@ -1916,39 +1939,34 @@ def obtener_productos_base():
                 "productos nuevos desde",
                 "opciones desde",
                 "precio desde",
+                "ver opciones de compra",
             )):
-                print("DESCARTADO: precio 'desde' de catálogo:", item_id, "|", nombre)
+                print("DESCARTADO: contexto de catálogo:", item_id, "|", nombre)
                 continue
 
-            # Marcamos verificado en el sentido correcto para esta arquitectura:
-            # los cuatro datos proceden del mismo registro atómico del listado.
             producto["item_id"] = item_id
             producto["nombre"] = nombre
             producto["url_original"] = enlace
             producto["imagen_url"] = imagen
             producto["precio"] = precio
             producto["precio_verificado"] = True
-            producto["precio_fuente"] = "mismo_resultado_listado"
-
-            # Las características no son críticas para la correspondencia.
+            producto["precio_fuente"] = "publicacion_individual_mismo_resultado"
             producto["atributos_visuales"] = atributos_desde_titulo(nombre)
 
             nuevos[item_id] = producto
             print(
-                f"NUEVO ATÓMICO {len(nuevos)}:",
-                item_id, "|", nombre, "| precio=", precio
+                f"PUBLICACIÓN INDIVIDUAL {len(nuevos)}:",
+                item_id, "|", nombre, "| precio=", precio,
+                "| link=", enlace
             )
 
-            if len(nuevos) >= CANTIDAD_PRODUCTOS:
-                break
-
-        print("Nuevos atómicos acumulados:", len(nuevos))
+        print("Publicaciones individuales acumuladas:", len(nuevos))
 
     if len(nuevos) < CANTIDAD_PRODUCTOS:
         raise RuntimeError(
-            f"Solo se consiguieron {len(nuevos)} productos nuevos completos y "
-            f"se necesitan {CANTIDAD_PRODUCTOS}. No se usarán repetidos ni "
-            "registros incompletos."
+            f"Solo se consiguieron {len(nuevos)} publicaciones individuales nuevas "
+            f"y se necesitan {CANTIDAD_PRODUCTOS}. No se usarán páginas de catálogo, "
+            "precios 'desde' ni productos repetidos."
         )
 
     candidatos = list(nuevos.values())
