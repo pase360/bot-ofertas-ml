@@ -37,11 +37,95 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 pillow
 
+      - name: Renovar token Mercado Libre
+        env:
+          MELI_CLIENT_ID: ${{ secrets.MELI_CLIENT_ID }}
+          MELI_CLIENT_SECRET: ${{ secrets.MELI_CLIENT_SECRET }}
+          MELI_REFRESH_TOKEN_INICIAL: ${{ secrets.MELI_REFRESH_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os
+          import json
+          import base64
+          import hashlib
+          import hmac
+          import secrets
+          import requests
+          from pathlib import Path
+
+          STATE = Path(".meli_refresh_state.enc")
+          client_id = os.environ["MELI_CLIENT_ID"]
+          client_secret = os.environ["MELI_CLIENT_SECRET"]
+          initial_refresh = os.environ["MELI_REFRESH_TOKEN_INICIAL"]
+
+          def key():
+              return hashlib.sha256(client_secret.encode()).digest()
+
+          def encrypt(value):
+              raw = value.encode()
+              nonce = secrets.token_bytes(32)
+              stream = bytearray()
+              counter = 0
+              while len(stream) < len(raw):
+                  stream.extend(hashlib.sha256(key() + nonce + counter.to_bytes(8, "big")).digest())
+                  counter += 1
+              cipher = bytes(a ^ b for a, b in zip(raw, stream))
+              tag = hmac.new(key(), nonce + cipher, hashlib.sha256).digest()
+              return base64.urlsafe_b64encode(nonce + tag + cipher).decode()
+
+          def decrypt(value):
+              blob = base64.urlsafe_b64decode(value.encode())
+              nonce, tag, cipher = blob[:32], blob[32:64], blob[64:]
+              expected = hmac.new(key(), nonce + cipher, hashlib.sha256).digest()
+              if not hmac.compare_digest(tag, expected):
+                  raise RuntimeError("Estado de token inválido")
+              stream = bytearray()
+              counter = 0
+              while len(stream) < len(cipher):
+                  stream.extend(hashlib.sha256(key() + nonce + counter.to_bytes(8, "big")).digest())
+                  counter += 1
+              raw = bytes(a ^ b for a, b in zip(cipher, stream))
+              return raw.decode()
+
+          refresh = decrypt(STATE.read_text().strip()) if STATE.exists() else initial_refresh
+
+          r = requests.post(
+              "https://api.mercadolibre.com/oauth/token",
+              data={
+                  "grant_type": "refresh_token",
+                  "client_id": client_id,
+                  "client_secret": client_secret,
+                  "refresh_token": refresh,
+              },
+              timeout=30,
+          )
+
+          data = r.json()
+          if r.status_code != 200 or not data.get("access_token") or not data.get("refresh_token"):
+              print("ERROR renovando autorización de Mercado Libre")
+              print("HTTP:", r.status_code)
+              print("error:", data.get("error", "desconocido"))
+              print("message:", data.get("message", data.get("error_description", "sin detalle")))
+              raise SystemExit(1)
+
+          access = data["access_token"]
+          new_refresh = data["refresh_token"]
+
+          print(f"::add-mask::{access}")
+          print(f"::add-mask::{new_refresh}")
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
+              f.write("MELI_ACCESS_TOKEN=" + access + "\n")
+
+          STATE.write_text(encrypt(new_refresh), encoding="utf-8")
+          print("Autorización Mercado Libre renovada correctamente")
+          PY
+
       - name: Ejecutar Bot de Ofertas
         run: |
           python main.py
 
-      - name: Guardar tanda, datos, imágenes e historial en GitHub
+      - name: Guardar tanda, datos, imágenes, historial y estado de autorización
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -50,6 +134,7 @@ jobs:
           git add datos_tanda.txt
           git add imagenes_tanda.txt
           git add historial_publicados.txt
+          git add .meli_refresh_state.enc
           git add -A ofertas/
 
           if git diff --cached --quiet; then
