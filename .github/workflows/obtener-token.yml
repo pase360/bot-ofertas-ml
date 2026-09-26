@@ -8,32 +8,46 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Intercambiar codigo por token
+      - name: Obtener nuevo access token
         env:
           CLIENT_ID: ${{ secrets.MELI_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.MELI_CLIENT_SECRET }}
-          AUTH_CODE: ${{ secrets.MELI_AUTH_CODE }}
+          REFRESH_TOKEN: ${{ secrets.MELI_REFRESH_TOKEN }}
         run: |
-          curl -s -X POST "https://api.mercadolibre.com/oauth/token" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "grant_type=authorization_code" \
-            -d "client_id=$CLIENT_ID" \
-            -d "client_secret=$CLIENT_SECRET" \
-            -d "code=$AUTH_CODE" \
-            -d "redirect_uri=https://www.google.com" \
-            -o token.json
-
           python - <<'PY'
-          import json
-          data = json.load(open("token.json"))
+          import os
+          import requests
 
-          if "access_token" not in data:
-              print("ERROR DE MERCADO LIBRE:")
-              print(data)
+          r = requests.post(
+              "https://api.mercadolibre.com/oauth/token",
+              data={
+                  "grant_type": "refresh_token",
+                  "client_id": os.environ["CLIENT_ID"],
+                  "client_secret": os.environ["CLIENT_SECRET"],
+                  "refresh_token": os.environ["REFRESH_TOKEN"],
+              },
+              timeout=30,
+          )
+
+          data = r.json()
+
+          if r.status_code != 200 or "access_token" not in data:
+              print("ERROR AL RENOVAR TOKEN")
+              print("HTTP:", r.status_code)
+              print("error:", data.get("error", "desconocido"))
+              print("message:", data.get("message", "sin detalle"))
               raise SystemExit(1)
 
-          print("TOKEN OBTENIDO CORRECTAMENTE")
-          print("ACCESS_TOKEN=" + data["access_token"])
-          if data.get("refresh_token"):
-              print("REFRESH_TOKEN=" + data["refresh_token"])
+          access = data["access_token"]
+          refresh = data.get("refresh_token", "")
+
+          # Enmascara inmediatamente ambos valores en GitHub Actions.
+          print(f"::add-mask::{access}")
+          if refresh:
+              print(f"::add-mask::{refresh}")
+
+          print("TOKEN RENOVADO CORRECTAMENTE")
+          print("IMPORTANTE: se generó un ACCESS_TOKEN nuevo.")
+          if refresh:
+              print("IMPORTANTE: Mercado Libre también devolvió un REFRESH_TOKEN nuevo.")
           PY
