@@ -1780,13 +1780,11 @@ def _urls_fuentes_ampliadas():
     No cambia historial, extractor, precio, imagen, link ni generación.
     """
     consultas = [
-        # Prioridad diversa: las primeras fuentes cubren rubros distintos.
-        # Como la tanda toma como máximo 1 producto válido por fuente, este orden
-        # evita que los 10 productos salgan casi todos de tecnología.
-        "hogar", "cocina", "herramientas", "tecnologia", "deportes",
-        "indumentaria", "belleza", "juguetes", "mascotas", "accesorios auto",
-        "celulares", "electrodomesticos", "computacion", "audio", "calzado",
-        "bebes", "motos", "jardin", "oficina", "iluminacion",
+        # originales v6
+        "tecnologia", "celulares", "hogar", "cocina", "herramientas",
+        "electrodomesticos", "computacion", "audio", "deportes", "calzado",
+        "indumentaria", "belleza", "juguetes", "bebes", "mascotas",
+        "accesorios auto", "motos", "jardin", "oficina", "iluminacion",
 
         # búsquedas adicionales concretas para conseguir IDs nuevos
         "smart tv", "televisores", "notebook", "tablet", "monitores",
@@ -1932,30 +1930,148 @@ def convertir_a_publicacion_exacta(producto):
     )
     return producto
 
+def _categoria_para_diversidad(producto):
+    """Clasifica solo para VARIAR la tanda. No altera producto, precio, link ni imagen."""
+    texto = " ".join([
+        limpiar_texto(producto.get("nombre", "")),
+        limpiar_texto(producto.get("url_original", "")),
+    ]).lower()
+
+    grupos = [
+        ("herramientas", (
+            "taladro", "amoladora", "atornillador", "hidrolavadora", "soldadora",
+            "compresor", "herramienta", "llave", "mecha", "sierra", "martillo"
+        )),
+        ("hogar_cocina", (
+            "heladera", "freezer", "microondas", "cafetera", "licuadora", "batidora",
+            "freidora", "aspiradora", "lavarropas", "secarropas", "colchon", "mueble",
+            "silla", "mesa", "placard", "olla", "sarten", "vajilla", "tostadora",
+            "pava electrica", "almohada", "sabana", "toalla", "organizador"
+        )),
+        ("tecnologia", (
+            "placa de video", "geforce", "radeon", "rtx", "gpu", "notebook", "laptop",
+            "celular", "smartphone", "tablet", "monitor", "procesador", "disco ssd",
+            "ssd", "memoria ram", "teclado", "mouse", "webcam", "router", "impresora",
+            "consola", "joystick", "smart tv", "televisor", "auricular", "parlante",
+            "power bank", "cargador", "micro sd", "pendrive"
+        )),
+        ("deportes", (
+            "bicicleta", "cinta caminadora", "pesas", "mancuerna", "fitness", "gym",
+            "deportivo", "pelota", "futbol", "running", "entrenamiento"
+        )),
+        ("moda_calzado", (
+            "zapatilla", "calzado", "campera", "remera", "pantalon", "vestido",
+            "mochila", "valija", "bolso", "ropa", "indumentaria"
+        )),
+        ("belleza_cuidado", (
+            "perfume", "shampoo", "secador de pelo", "planchita", "afeitadora",
+            "cepillo electrico", "belleza", "cuidado personal", "maquillaje"
+        )),
+        ("juguetes_bebes", (
+            "juguete", "juego de mesa", "bebe", "cochecito", "silla bebe", "pañal"
+        )),
+        ("mascotas", (
+            "mascota", "perro", "gato", "alimento mascotas", "cama mascotas"
+        )),
+        ("auto_moto", (
+            "auto", "moto", "neumatico", "cubierta", "bateria", "aceite motor",
+            "repuesto", "soporte celular auto"
+        )),
+        ("seguridad_iluminacion", (
+            "camara seguridad", "camara wifi", "alarma", "cerradura digital",
+            "lampara led", "tira led", "iluminacion"
+        )),
+        ("oficina_escolar", (
+            "papeleria", "utiles escolares", "escritorio", "biblioteca", "oficina"
+        )),
+        ("supermercado_limpieza", (
+            "supermercado", "limpieza", "detergente", "jabon", "papel higienico"
+        )),
+    ]
+
+    for categoria, palabras in grupos:
+        if any(palabra in texto for palabra in palabras):
+            return categoria
+    return "otros"
+
+
+def _seleccionar_tanda_diversa(candidatos, cantidad):
+    """
+    Prefiere variedad, pero NUNCA hace fallar la tanda por falta de categorías.
+    1ª pasada: máximo 1 por categoría.
+    2ª pasada: máximo 2 por categoría.
+    3ª pasada: completa con los mejores restantes, sin límite.
+    """
+    ordenados = sorted(candidatos, key=_puntaje_producto_demanda, reverse=True)
+    elegidos = []
+    ids_elegidos = set()
+    conteo = {}
+
+    def agregar(producto):
+        item_id = limpiar_texto(producto.get("item_id", "")).upper()
+        if item_id in ids_elegidos:
+            return False
+        categoria = _categoria_para_diversidad(producto)
+        elegidos.append(producto)
+        ids_elegidos.add(item_id)
+        conteo[categoria] = conteo.get(categoria, 0) + 1
+        return True
+
+    # 1) La mayor variedad posible.
+    categorias_usadas = set()
+    for producto in ordenados:
+        if len(elegidos) >= cantidad:
+            break
+        categoria = _categoria_para_diversidad(producto)
+        if categoria in categorias_usadas:
+            continue
+        if agregar(producto):
+            categorias_usadas.add(categoria)
+
+    # 2) Si faltan lugares, permite hasta 2 de cada categoría.
+    for producto in ordenados:
+        if len(elegidos) >= cantidad:
+            break
+        categoria = _categoria_para_diversidad(producto)
+        if conteo.get(categoria, 0) >= 2:
+            continue
+        agregar(producto)
+
+    # 3) Respaldo: completa sí o sí con productos válidos disponibles.
+    for producto in ordenados:
+        if len(elegidos) >= cantidad:
+            break
+        agregar(producto)
+
+    print("Categorías elegidas:", [
+        _categoria_para_diversidad(p) for p in elegidos
+    ])
+    return elegidos[:cantidad]
+
+
 def obtener_productos_base():
     """
-    TANDA NORMAL ESTABLE.
+    TANDA NORMAL ESTABLE Y DIVERSA.
 
-    Mercado Libre no expone de forma fiable el precio de la publicación
-    individual al runner de GitHub. Por eso NO se vuelve a abrir la publicación
-    para verificar el precio.
-
-    Se acepta únicamente un registro completo extraído de UN MISMO resultado:
-    item_id + enlace + título + precio + imagen.
-
-    Además se descartan tarjetas cuyo contexto indique explícitamente que el
-    importe es un precio mínimo de catálogo ('desde', 'más opciones desde',
-    'productos nuevos desde'). Nunca se sustituye por lowPrice.
+    Primero reúne un POOL amplio de productos válidos usando exactamente las
+    mismas validaciones de item/link/precio/imagen que ya funcionaban. Después
+    elige 10 procurando variedad de rubros. La diversidad es una preferencia,
+    nunca una condición que pueda dejar la tanda incompleta.
     """
-    print("--- BUSCANDO 10 PRODUCTOS NUEVOS, ATÓMICOS Y SIN PRECIO 'DESDE' ---")
+    print("--- BUSCANDO PRODUCTOS NUEVOS, ATÓMICOS, SIN PRECIO 'DESDE' Y CON VARIEDAD ---")
     historial = cargar_historial_publicados()
     print("Publicaciones ya usadas en el historial:", len(historial))
 
     nuevos = {}
     fuentes = _urls_fuentes_ampliadas()
 
+    # Importante: no limitar a 1 por fuente. Actualmente Mercado Libre puede
+    # exponer item_id utilizable solo en algunas fuentes. Reunimos varios de la
+    # fuente que funcione y diversificamos AL FINAL.
+    OBJETIVO_POOL = max(CANTIDAD_PRODUCTOS * 6, CANTIDAD_PRODUCTOS)
+
     for url_pagina in fuentes:
-        if len(nuevos) >= CANTIDAD_PRODUCTOS:
+        if len(nuevos) >= OBJETIVO_POOL:
             break
 
         try:
@@ -1988,14 +2104,11 @@ def obtener_productos_base():
             if not precio or precio == "Precio no disponible":
                 continue
 
-            # El item de la URL debe ser el mismo item del registro.
             item_url = extraer_item_id_url(enlace)
             if item_url and item_url != item_id:
                 print("DESCARTADO: item/link no coinciden:", item_id, "|", item_url)
                 continue
 
-            # Si el extractor dejó contexto textual de la tarjeta, rechazamos
-            # explícitamente precios mínimos de catálogo.
             contexto = " ".join(
                 limpiar_texto(producto.get(k, ""))
                 for k in (
@@ -2005,17 +2118,12 @@ def obtener_productos_base():
             ).lower()
 
             if any(frase in contexto for frase in (
-                "más opciones desde",
-                "mas opciones desde",
-                "productos nuevos desde",
-                "opciones desde",
-                "precio desde",
+                "más opciones desde", "mas opciones desde", "productos nuevos desde",
+                "opciones desde", "precio desde",
             )):
                 print("DESCARTADO: precio 'desde' de catálogo:", item_id, "|", nombre)
                 continue
 
-            # Marcamos verificado en el sentido correcto para esta arquitectura:
-            # los cuatro datos proceden del mismo registro atómico del listado.
             producto["item_id"] = item_id
             producto["nombre"] = nombre
             producto["url_original"] = enlace
@@ -2023,33 +2131,36 @@ def obtener_productos_base():
             producto["precio"] = precio
             producto["precio_verificado"] = True
             producto["precio_fuente"] = "mismo_resultado_listado"
-
-            # Las características no son críticas para la correspondencia.
             producto["atributos_visuales"] = atributos_desde_titulo(nombre)
 
             nuevos[item_id] = producto
             print(
-                f"NUEVO ATÓMICO {len(nuevos)}:",
-                item_id, "|", nombre, "| precio=", precio
+                f"CANDIDATO VÁLIDO {len(nuevos)}:",
+                item_id, "|", _categoria_para_diversidad(producto), "|",
+                nombre, "| precio=", precio
             )
 
-            # Diversidad: como máximo 1 producto válido por fuente/búsqueda.
-            # No cambia precio, link, imagen, historial ni validaciones.
-            break
+            if len(nuevos) >= OBJETIVO_POOL:
+                break
 
-        print("Nuevos atómicos acumulados:", len(nuevos))
+        print("Candidatos válidos acumulados:", len(nuevos))
 
     if len(nuevos) < CANTIDAD_PRODUCTOS:
         raise RuntimeError(
             f"Solo se consiguieron {len(nuevos)} productos nuevos completos y "
-            f"se necesitan {CANTIDAD_PRODUCTOS}. No se usarán repetidos ni "
-            "registros incompletos."
+            f"se necesitan {CANTIDAD_PRODUCTOS}. No se usarán repetidos ni registros incompletos."
         )
 
     candidatos = list(nuevos.values())
-    candidatos.sort(key=_puntaje_producto_demanda, reverse=True)
-    return candidatos[:CANTIDAD_PRODUCTOS]
+    elegidos = _seleccionar_tanda_diversa(candidatos, CANTIDAD_PRODUCTOS)
 
+    if len(elegidos) != CANTIDAD_PRODUCTOS:
+        raise RuntimeError(
+            f"La selección diversa devolvió {len(elegidos)} productos y se necesitan "
+            f"{CANTIDAD_PRODUCTOS}."
+        )
+
+    return elegidos
 
 def _leer_demanda_pendiente():
     """Lee necesidades detectadas sin volver a procesar la misma línea."""
