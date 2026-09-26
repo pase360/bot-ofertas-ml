@@ -1800,6 +1800,29 @@ def _urls_fuentes_ampliadas():
         "accesorios celular", "cargadores", "power bank", "discos ssd",
         "memorias ram", "placas de video", "procesadores", "consolas",
         "gaming", "ofertas hogar", "ofertas tecnologia", "ofertas herramientas",
+        # Reserva amplia: se consulta sólo si las fuentes anteriores no alcanzan.
+        "smart tv", "televisores", "notebooks", "tablets", "auriculares bluetooth",
+        "parlantes bluetooth", "smartwatch", "impresoras", "monitores", "routers wifi",
+        "microondas", "hornos electricos", "freidoras de aire", "cafeteras", "licuadoras",
+        "batidoras", "tostadoras", "pavas electricas", "ventiladores", "calefactores",
+        "aires acondicionados", "heladeras", "freezers", "lavarropas", "secarropas",
+        "aspiradoras", "planchas", "colchones", "almohadas", "sabanas", "toallas",
+        "ollas", "sartenes", "vajilla", "organizadores", "muebles", "sillas",
+        "escritorios", "bibliotecas", "herramientas electricas", "taladros", "amoladoras",
+        "atornilladores", "hidrolavadoras", "compresores", "soldadoras", "cajas herramientas",
+        "jardineria", "cortadoras de cesped", "bicicletas", "cascos bicicleta",
+        "zapatillas", "calzado", "camperas", "remeras", "pantalones", "ropa deportiva",
+        "valijas", "bolsos", "mochilas escolares", "juguetes", "juegos de mesa",
+        "bebes", "cochecitos bebe", "sillas bebe", "mascotas", "alimento mascotas",
+        "camas mascotas", "perfumes hombre", "perfumes mujer", "shampoo", "secadores pelo",
+        "planchitas pelo", "afeitadoras", "cepillos electricos", "camaras wifi",
+        "alarmas", "cerraduras digitales", "lamparas led", "tiras led", "baterias",
+        "cubiertas auto", "aceite motor", "accesorios auto", "soportes celular",
+        "cables usb", "cargadores celular", "fundas celular", "teclados", "mouse",
+        "webcam", "discos externos", "pendrives", "micro sd", "fuentes pc",
+        "gabinetes pc", "joystick", "consolas videojuegos", "ofertas supermercado",
+        "limpieza hogar", "papeleria", "utiles escolares",
+
     ]
 
     urls = [URL_MAS_VENDIDOS, URL_OFERTAS]
