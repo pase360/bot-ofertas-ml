@@ -1780,11 +1780,13 @@ def _urls_fuentes_ampliadas():
     No cambia historial, extractor, precio, imagen, link ni generación.
     """
     consultas = [
-        # originales v6
-        "tecnologia", "celulares", "hogar", "cocina", "herramientas",
-        "electrodomesticos", "computacion", "audio", "deportes", "calzado",
-        "indumentaria", "belleza", "juguetes", "bebes", "mascotas",
-        "accesorios auto", "motos", "jardin", "oficina", "iluminacion",
+        # Prioridad diversa: las primeras fuentes cubren rubros distintos.
+        # Como la tanda toma como máximo 1 producto válido por fuente, este orden
+        # evita que los 10 productos salgan casi todos de tecnología.
+        "hogar", "cocina", "herramientas", "tecnologia", "deportes",
+        "indumentaria", "belleza", "juguetes", "mascotas", "accesorios auto",
+        "celulares", "electrodomesticos", "computacion", "audio", "calzado",
+        "bebes", "motos", "jardin", "oficina", "iluminacion",
 
         # búsquedas adicionales concretas para conseguir IDs nuevos
         "smart tv", "televisores", "notebook", "tablet", "monitores",
@@ -2031,8 +2033,9 @@ def obtener_productos_base():
                 item_id, "|", nombre, "| precio=", precio
             )
 
-            if len(nuevos) >= CANTIDAD_PRODUCTOS:
-                break
+            # Diversidad: como máximo 1 producto válido por fuente/búsqueda.
+            # No cambia precio, link, imagen, historial ni validaciones.
+            break
 
         print("Nuevos atómicos acumulados:", len(nuevos))
 
