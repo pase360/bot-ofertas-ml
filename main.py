@@ -1,6 +1,7 @@
 import os
 import random
 import re
+import unicodedata
 import json
 from collections import deque
 from datetime import datetime, timezone
@@ -1869,89 +1870,44 @@ def _extraer_productos_pagina_generica(url_pagina, limite=80):
 
 
 
-def corregir_precio_catalogo_desde_producto(producto):
+def convertir_a_publicacion_exacta(producto):
     """
-    Solo actúa si el link es una página de catálogo /p/MLA...
-    Consulta /products/{PRODUCT_ID} y usa buy_box_winner.price, que corresponde
-    a la publicación ganadora de esa PDP. Si no puede obtenerlo, deja intacto
-    el precio original de v11 y nunca rompe la tanda.
+    Convierte cualquier enlace de catálogo /p/ en un enlace directo al ITEM_ID
+    que YA fue extraído junto con precio/título/imagen del mismo resultado.
+
+    No consulta /sale_price ni /products, por lo que no depende de endpoints 403.
+    La regla pasa a ser:
+        ITEM_ID del resultado -> precio del mismo resultado -> imagen del mismo
+        resultado -> enlace directo a ese mismo ITEM_ID.
     """
-    try:
-        enlace = limpiar_texto(producto.get("url_original", ""))
-        if not enlace:
-            return producto
+    item_id = limpiar_texto(producto.get("item_id", "")).upper()
+    if not re.fullmatch(r"MLA\d{7,}", item_id):
+        raise RuntimeError("No se puede construir publicación exacta: item_id inválido")
 
-        parsed = urlsplit(enlace)
-        m = re.search(r"/p/(MLA\d+)", parsed.path, re.I)
-        if not m:
-            return producto
+    titulo = limpiar_texto(producto.get("nombre", "producto"))
+    slug = unicodedata.normalize("NFKD", titulo)
+    slug = "".join(c for c in slug if not unicodedata.combining(c))
+    slug = slug.lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug).strip("-")
+    slug = slug[:120].strip("-") or "producto"
 
-        product_id = m.group(1).upper()
-        token = limpiar_texto(os.getenv("MELI_ACCESS_TOKEN", ""))
+    numero = item_id[3:]
+    enlace_exacto = (
+        f"https://articulo.mercadolibre.com.ar/"
+        f"MLA-{numero}-{slug}-_JM"
+    )
 
-        headers = dict(HEADERS)
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+    producto["url_original"] = enlace_exacto
+    producto["precio_verificado"] = True
+    producto["precio_fuente"] = "mismo_resultado_item_exacto"
 
-        r = requests.get(
-            f"https://api.mercadolibre.com/products/{product_id}",
-            headers=headers,
-            timeout=20,
-        )
-
-        # Si la app no tiene permiso para este recurso con token, probamos la
-        # representación pública de la PDP sin Authorization.
-        if r.status_code in (401, 403):
-            r = requests.get(
-                f"https://api.mercadolibre.com/products/{product_id}",
-                headers=HEADERS,
-                timeout=20,
-            )
-
-        if r.status_code != 200:
-            print("AVISO PRODUCT PDP:", product_id, "HTTP", r.status_code,
-                  "- conserva precio v11")
-            return producto
-
-        data = r.json()
-        winner = data.get("buy_box_winner")
-        if not isinstance(winner, dict):
-            print("AVISO PRODUCT PDP:", product_id,
-                  "sin buy_box_winner - conserva precio v11")
-            return producto
-
-        amount = winner.get("price")
-        winner_item = limpiar_texto(winner.get("item_id", "")).upper()
-        if amount is None:
-            return producto
-
-        numero = float(amount)
-        if numero <= 0:
-            return producto
-
-        if abs(numero - round(numero)) < 0.000001:
-            precio = f"$ {int(round(numero)):,}".replace(",", ".")
-        else:
-            entero = int(numero)
-            centavos = int(round((numero - entero) * 100))
-            precio = (f"$ {entero:,},{centavos:02d}"
-                      .replace(",", "X").replace(".", ",").replace("X", "."))
-
-        anterior = limpiar_texto(producto.get("precio", ""))
-        producto["precio"] = precio
-        producto["precio_verificado"] = True
-        producto["precio_fuente"] = "buy_box_winner"
-        producto["winner_item_id"] = winner_item
-
-        print("PRECIO PDP:", product_id,
-              "| ganador=", winner_item,
-              "| anterior=", anterior,
-              "| visible=", precio)
-        return producto
-
-    except Exception as e:
-        print("AVISO PRODUCT PDP:", e, "- conserva precio v11")
-        return producto
+    print(
+        "ITEM EXACTO:",
+        item_id,
+        "| precio=", producto.get("precio", ""),
+        "| link=", enlace_exacto,
+    )
+    return producto
 
 
 def obtener_productos_base():
@@ -2636,7 +2592,7 @@ def main():
 
     # 2) TANDA NORMAL: siempre 10 NUEVOS; nunca completa con repetidos.
     productos = obtener_productos_base()
-    productos = [corregir_precio_catalogo_desde_producto(p) for p in productos]
+    productos = [convertir_a_publicacion_exacta(p) for p in productos]
     if len(productos) != CANTIDAD_PRODUCTOS:
         raise RuntimeError(
             f"La tanda normal debe tener {CANTIDAD_PRODUCTOS} productos nuevos; "
