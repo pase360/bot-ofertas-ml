@@ -146,6 +146,40 @@ def tiene_publicacion_exacta(url):
                 or re.search(r"pdp_filters=[^&]*item[_-]?id[^&]*mla-?\d+", query_decodificada))
 
 
+
+def extraer_item_id_url(url):
+    """
+    Extrae el MLA de la publicación exacta desde una URL de Mercado Libre.
+
+    Prioridad:
+    1) item_id dentro de la query/pdp_filters (caso catálogo /p/MLA...)
+    2) wid dentro de la query
+    3) MLA del path solo cuando es una publicación /MLA-...
+    """
+    if not url:
+        return ""
+
+    decodificada = requests.utils.unquote(str(url)).upper()
+
+    # En catálogo, el item exacto viene normalmente en:
+    # pdp_filters=item_id:MLA123... o item_id=MLA123...
+    m = re.search(r"ITEM[_-]?ID(?:=|:)[^&]*?(MLA-?\d{7,})", decodificada)
+    if m:
+        return m.group(1).replace("-", "")
+
+    m = re.search(r"(?:[?&]|^)WID=(MLA-?\d{7,})", decodificada)
+    if m:
+        return m.group(1).replace("-", "")
+
+    # Publicación clásica directa /MLA-123... o /MLA123...
+    path = urlsplit(str(url)).path.upper()
+    m = re.search(r"/(MLA-?\d{7,})(?:-|/|$)", path)
+    if m:
+        return m.group(1).replace("-", "")
+
+    return ""
+
+
 def nombre_desde_url(url):
     try:
         path = urlparse(url).path
@@ -1861,7 +1895,7 @@ def obtener_productos_base():
                 continue
 
             # El item de la URL debe ser el mismo item del registro.
-            item_url = extraer_item_id(enlace)
+            item_url = extraer_item_id_url(enlace)
             if item_url and item_url != item_id:
                 print("DESCARTADO: item/link no coinciden:", item_id, "|", item_url)
                 continue
