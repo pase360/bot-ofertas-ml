@@ -16,22 +16,27 @@ from PIL import Image, ImageDraw, ImageFont
 
 URL_MAS_VENDIDOS = "https://www.mercadolibre.com.ar/mas-vendidos"
 URL_OFERTAS = "https://www.mercadolibre.com.ar/ofertas"
-API_BASE = "https://api.mercadolibre.com"
 CANTIDAD_PRODUCTOS = 10
 
 DEMANDA_PATH = Path("demanda_detectada.txt")
 DEMANDA_PROCESADA_PATH = Path("demanda_procesada.txt")
 REPORTE_DEMANDA_PATH = Path("reporte_demanda.txt")
 
-MELI_ACCESS_TOKEN = os.getenv("MELI_ACCESS_TOKEN", "").strip()
-
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/153.0.0.0 Safari/537.36"
+        "Chrome/131.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "es-AR,es;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "es-AR,es;q=0.9,en;q=0.8",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
 }
 
 CARPETA_OFERTAS = Path("ofertas")
@@ -108,14 +113,37 @@ def limpiar_url(url):
     return urlunsplit((partes.scheme, partes.netloc, partes.path, partes.query, ""))
 
 
-def _formatear_precio(numero):
-    if numero is None:
-        return ""
+def _normalizar_numero_precio(valor):
+    if valor is None:
+        return None
+    if isinstance(valor, (int, float)):
+        return float(valor) if valor > 0 else None
+
+    texto = limpiar_texto(valor)
+    if not texto:
+        return None
+
+    texto = texto.replace("$", "").replace(" ", "")
+    if "," in texto:
+        texto = texto.replace(".", "").replace(",", ".")
+    else:
+        partes = texto.split(".")
+        if len(partes) > 1 and all(p.isdigit() for p in partes):
+            if len(partes[-1]) == 3:
+                texto = "".join(partes)
+
+    texto = re.sub(r"[^0-9.]", "", texto)
     try:
-        numero = float(numero)
+        numero = float(texto)
     except Exception:
-        return ""
-    if numero <= 0:
+        return None
+
+    return numero if numero > 0 else None
+
+
+def _formatear_precio(numero):
+    numero = _normalizar_numero_precio(numero)
+    if numero is None:
         return ""
 
     if abs(numero - round(numero)) < 0.001:
@@ -157,25 +185,14 @@ def es_producto_permitido(producto):
     return True
 
 
+SESION = requests.Session()
+SESION.headers.update(HEADERS)
+
+
 def safe_get(url, timeout=30):
-    response = requests.get(url, headers=HEADERS, timeout=timeout)
+    response = SESION.get(url, timeout=timeout)
     response.raise_for_status()
     return response
-
-
-def api_get(endpoint, params=None, timeout=30):
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": HEADERS["User-Agent"],
-    }
-    token = os.getenv("MELI_ACCESS_TOKEN", "").strip() or MELI_ACCESS_TOKEN
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    url = endpoint if endpoint.startswith("http") else f"{API_BASE}{endpoint}"
-    response = requests.get(url, headers=headers, params=params, timeout=timeout)
-    response.raise_for_status()
-    return response.json()
 
 
 # =========================================================
@@ -256,42 +273,8 @@ def quitar_fondo_blanco_conectado(imagen):
 
 
 # =========================================================
-# ATRIBUTOS REALES DE LA PUBLICACIÓN
+# ATRIBUTOS REALES DESDE TÍTULO O JSON-LD
 # =========================================================
-
-def normalizar_atributo(texto):
-    texto = limpiar_texto(texto)
-    texto = re.sub(r"\s*:\s*", ": ", texto)
-    palabras = texto.split()
-    if len(palabras) > 7:
-        texto = " ".join(palabras[:7])
-    return texto.strip(" -–—:;")
-
-
-def es_texto_util_atributo(texto, nombre_producto=""):
-    texto = limpiar_texto(texto)
-    if not texto:
-        return False
-
-    inferior = texto.lower()
-    if len(texto) < 3 or len(texto) > 55:
-        return False
-
-    prohibidos = [
-        "mercado libre", "mercado pago", "comprar", "oferta",
-        "envío", "envio", "devolución", "devolucion", "stock",
-        "cuotas", "medios de pago", "vendidos", "opiniones",
-        "preguntas", "publicación", "publicacion", "marca genérica",
-        "no aplica", "sin marca", "universal"
-    ]
-    if any(p in inferior for p in prohibidos):
-        return False
-    if "$" in texto or "%" in texto:
-        return False
-    if nombre_producto and limpiar_texto(nombre_producto).lower() == inferior:
-        return False
-    return True
-
 
 def atributos_desde_titulo(titulo):
     t = limpiar_texto(titulo)
@@ -343,59 +326,6 @@ def atributos_desde_titulo(titulo):
     return resultado[:3]
 
 
-def _extraer_atributos_item_api(item_json, titulo):
-    resultado = []
-    atributos = item_json.get("attributes") or []
-    prioritarios = {"BRAND", "MODEL", "COLOR", "CAPACITY", "POWER", "MATERIAL", "VOLUME_CAPACITY", "WEIGHT"}
-
-    for attr in atributos:
-        if attr.get("id") in prioritarios:
-            nombre = limpiar_texto(attr.get("name", ""))
-            valor = limpiar_texto(attr.get("value_name", ""))
-            if nombre and valor:
-                texto = normalizar_atributo(f"{nombre}: {valor}")
-                if es_texto_util_atributo(texto, titulo) and texto not in resultado:
-                    resultado.append(texto)
-            if len(resultado) >= 3:
-                return resultado
-
-    for attr in atributos:
-        nombre = limpiar_texto(attr.get("name", ""))
-        valor = limpiar_texto(attr.get("value_name", ""))
-        if nombre and valor:
-            texto = normalizar_atributo(f"{nombre}: {valor}")
-            if es_texto_util_atributo(texto, titulo) and texto not in resultado:
-                resultado.append(texto)
-        if len(resultado) >= 3:
-            return resultado
-
-    if len(resultado) < 3:
-        for extra in atributos_desde_titulo(titulo):
-            if extra.lower() not in [x.lower() for x in resultado]:
-                resultado.append(extra)
-            if len(resultado) >= 3:
-                break
-
-    return resultado[:3]
-
-
-def _mejor_imagen_api(item_json):
-    pictures = item_json.get("pictures") or []
-    if pictures and isinstance(pictures, list):
-        pic = pictures[0]
-        if isinstance(pic, dict):
-            url = pic.get("secure_url") or pic.get("url") or ""
-            if url:
-                return url
-
-    thumb = item_json.get("thumbnail") or ""
-    if thumb:
-        thumb = re.sub(r"-I(\.[a-zA-Z0-9]+)$", r"-O\1", thumb)
-        if thumb.startswith("http://"):
-            thumb = "https://" + thumb[7:]
-    return thumb
-
-
 # =========================================================
 # HISTORIAL
 # =========================================================
@@ -427,7 +357,7 @@ def guardar_historial_publicados(productos):
 
 
 # =========================================================
-# MÉTODO HÍBRIDO: DESCUBRE IDs EN WEB PÚBLICA + LEE DETALLES EN API OFICIAL
+# EXTRACCIÓN DIRECTA DE DATOS ESTRUCTURADOS EN HTML (JSON-LD + TARJETAS)
 # =========================================================
 
 def _consultas_ampliadas():
@@ -476,120 +406,186 @@ def _url_busqueda_ml(consulta):
     return f"https://listado.mercadolibre.com.ar/{slug}" if slug else URL_OFERTAS
 
 
-def _descubrir_item_ids_en_url(url):
+def _extraer_productos_html_universal(url_pagina):
     """
-    Escanea el HTML crudo de la página pública de Mercado Libre buscando
-    cualquier referencia a publicaciones (MLA1234567890 o /MLA-1234567890)
-    sin depender de clases CSS ni estructura visual.
+    Extrae productos completos (ID, título, precio real, imagen HD y link exacto)
+    analizando tanto el bloque estructurado JSON-LD como las tarjetas HTML visibles
+    (poly-card / ui-search-result) de Mercado Libre.
     """
-    try:
-        resp = safe_get(url, timeout=25)
-        html = resp.text
-    except Exception as e:
-        print("AVISO web:", url, "|", e)
-        return []
+    resp = safe_get(url_pagina, timeout=30)
+    html = resp.text
+    soup = BeautifulSoup(html, "html.parser")
 
-    encontrados = []
-    vistos = set()
-    # Busca MLA seguido de 8 a 12 dígitos (con o sin guión)
-    for m in re.finditer(r"\bMLA-?(\d{8,12})\b", html, re.IGNORECASE):
-        item_id = "MLA" + m.group(1)
-        if item_id not in vistos:
-            vistos.add(item_id)
-            encontrados.append(item_id)
+    encontrados = {}
+
+    # 1) EXTRACCIÓN DESDE JSON-LD (Schema.org Product / ItemList)
+    for script in soup.find_all("script", type="application/ld+json"):
+        contenido = script.string or script.get_text(strip=True)
+        if not contenido:
+            continue
+        try:
+            data = json.loads(contenido)
+        except Exception:
+            continue
+
+        nodos = []
+        if isinstance(data, list):
+            nodos.extend(data)
+        elif isinstance(data, dict):
+            if "@graph" in data and isinstance(data["@graph"], list):
+                nodos.extend(data["@graph"])
+            elif "itemListElement" in data and isinstance(data["itemListElement"], list):
+                for el in data["itemListElement"]:
+                    if isinstance(el, dict) and isinstance(el.get("item"), dict):
+                        nodos.append(el["item"])
+                    elif isinstance(el, dict):
+                        nodos.append(el)
+            else:
+                nodos.append(data)
+
+        for prod in nodos:
+            if not isinstance(prod, dict):
+                continue
+            nombre = limpiar_texto(prod.get("name", ""))
+            link = limpiar_url(prod.get("url", ""))
+            if not nombre or not link:
+                continue
+
+            # Extraer ID del producto o publicación
+            m_id = re.search(r"MLA-?(\d{7,})", requests.utils.unquote(link), re.IGNORECASE)
+            if not m_id:
+                sku = limpiar_texto(prod.get("sku") or prod.get("productID") or "")
+                m_id = re.search(r"MLA-?(\d{7,})", sku, re.IGNORECASE)
+            if not m_id:
+                continue
+            item_id = "MLA" + m_id.group(1)
+
+            # Imagen
+            img_raw = prod.get("image")
+            imagen_url = ""
+            if isinstance(img_raw, str):
+                imagen_url = img_raw
+            elif isinstance(img_raw, list) and img_raw:
+                imagen_url = img_raw[0] if isinstance(img_raw[0], str) else ""
+            elif isinstance(img_raw, dict):
+                imagen_url = img_raw.get("url", "")
+            if not imagen_url or not imagen_url.startswith("http"):
+                continue
+
+            # Precio
+            offers = prod.get("offers")
+            precio_num = None
+            if isinstance(offers, dict):
+                precio_num = offers.get("price") or offers.get("lowPrice")
+            elif isinstance(offers, list) and offers and isinstance(offers[0], dict):
+                precio_num = offers[0].get("price") or offers[0].get("lowPrice")
+
+            precio = _formatear_precio(precio_num)
+            if not precio:
+                continue
+
+            encontrados[item_id] = {
+                "item_id": item_id,
+                "nombre": nombre,
+                "precio": precio,
+                "precio_anterior": "",
+                "descuento": "",
+                "cuotas": "",
+                "ranking": "",
+                "rating": "",
+                "vendidos": "",
+                "url_original": link,
+                "imagen_url": imagen_url,
+                "atributos_visuales": atributos_desde_titulo(nombre),
+                "precio_verificado": True,
+                "precio_fuente": "json_ld_estructurado",
+            }
+
+    # 2) EXTRACCIÓN DESDE TARJETAS VISIBLES DEL LISTADO (poly-card / ui-search-result)
+    tarjetas = soup.select(".poly-card, .ui-search-result__wrapper, .andes-card")
+    for card in tarjetas:
+        enlace = card.select_one("a[href*='/MLA-'], a[href*='/p/MLA'], a.poly-component__title, a.ui-search-link")
+        if not enlace:
+            continue
+
+        href = limpiar_url(enlace.get("href", ""))
+        if not href:
+            continue
+
+        # Buscar ID exacto en URL o atributos internos de la tarjeta
+        card_html = str(card)
+        m_item = re.search(r"(?:item_id[:=]|wid=|/MLA-?)(\d{8,12})", requests.utils.unquote(card_html), re.IGNORECASE)
+        if not m_item:
+            m_item = re.search(r"/p/MLA(\d{7,})", href, re.IGNORECASE)
+        if not m_item:
+            continue
+
+        item_id = "MLA" + m_item.group(1)
+        if item_id in encontrados:
+            continue
+
+        # Título
+        titulo_el = card.select_one(".poly-component__title, .ui-search-item__title, h2, h3")
+        nombre = limpiar_texto(titulo_el.get_text(" ", strip=True)) if titulo_el else limpiar_texto(enlace.get_text(" ", strip=True))
+        if len(nombre) < 6:
+            continue
+
+        # Precio actual (evitando precio tachado)
+        precio = ""
+        for sel_precio in (
+            ".poly-price__current .andes-money-amount__fraction",
+            ".ui-search-price__second-line .andes-money-amount__fraction",
+            ".andes-money-amount:not(.andes-money-amount--previous) .andes-money-amount__fraction",
+        ):
+            frac = card.select_one(sel_precio)
+            if frac:
+                txt_frac = limpiar_texto(frac.get_text())
+                if txt_frac:
+                    precio = "$ " + txt_frac
+                    break
+        if not precio:
+            continue
+
+        # Imagen
+        imagen_url = ""
+        for img in card.find_all("img"):
+            cand = img.get("data-src") or img.get("src") or ""
+            if cand.startswith("http") and "mlstatic.com" in cand and not any(x in cand.lower() for x in ("logo", "icon", "sprite")):
+                imagen_url = re.sub(r"-I(\.[a-zA-Z0-9]+)$", r"-O\1", cand)
+                break
+        if not imagen_url:
+            continue
+
+        # Descuento y cuotas opcionales
+        texto_card = limpiar_texto(card.get_text(" ", strip=True))
+        desc = ""
+        m_desc = re.search(r"(\d{1,2}%\s*OFF)", texto_card, re.IGNORECASE)
+        if m_desc:
+            desc = m_desc.group(1).upper()
+
+        cuotas = ""
+        m_cuotas = re.search(r"((?:Mismo precio(?: en)?\s+)?\d{1,2}\s+cuotas(?:\s+sin\s+inter[eé]s)?(?:\s+de\s+\$\s*[\d\.\,]+)?)", texto_card, re.IGNORECASE)
+        if m_cuotas:
+            cuotas = limpiar_texto(m_cuotas.group(1))
+
+        encontrados[item_id] = {
+            "item_id": item_id,
+            "nombre": nombre,
+            "precio": precio,
+            "precio_anterior": "",
+            "descuento": desc,
+            "cuotas": cuotas,
+            "ranking": "",
+            "rating": "",
+            "vendidos": "",
+            "url_original": href,
+            "imagen_url": imagen_url,
+            "atributos_visuales": atributos_desde_titulo(nombre),
+            "precio_verificado": True,
+            "precio_fuente": "tarjeta_html_ml",
+        }
 
     return encontrados
-
-
-def _obtener_items_multiget_api(item_ids):
-    """
-    Consulta hasta 20 ítems en una sola llamada a /items?ids=... de la API oficial,
-    el cual no requiere permisos de búsqueda global.
-    """
-    if not item_ids:
-        return []
-
-    items_validos = []
-    # Procesar en lotes de 20 (límite de Mercado Libre multiget)
-    for i in range(0, len(item_ids), 20):
-        lote = item_ids[i:i + 20]
-        ids_str = ",".join(lote)
-        try:
-            data = api_get("/items", params={"ids": ids_str}, timeout=30)
-            if isinstance(data, list):
-                for entrada in data:
-                    if isinstance(entrada, dict) and entrada.get("code") == 200:
-                        body = entrada.get("body")
-                        if isinstance(body, dict) and body.get("id"):
-                            items_validos.append(body)
-        except Exception as e:
-            print("AVISO multiget /items:", e)
-            # Fallback individual si falla el lote
-            for single_id in lote:
-                try:
-                    body = api_get(f"/items/{single_id}", timeout=20)
-                    if isinstance(body, dict) and body.get("id"):
-                        items_validos.append(body)
-                except Exception:
-                    pass
-
-    return items_validos
-
-
-def _construir_producto_desde_item_api(item_json):
-    item_id = limpiar_texto(item_json.get("id", "")).upper()
-    if not re.fullmatch(r"MLA\d{7,}", item_id):
-        return None
-
-    if item_json.get("status") != "active":
-        return None
-
-    if item_json.get("condition") != "new":
-        return None
-
-    nombre = limpiar_texto(item_json.get("title") or "")
-    precio_num = item_json.get("price")
-    precio = _formatear_precio(precio_num)
-    if not nombre or not precio:
-        return None
-
-    permalink = limpiar_url(item_json.get("permalink") or "")
-    if not permalink:
-        return None
-
-    imagen_url = _mejor_imagen_api(item_json)
-    if not imagen_url:
-        return None
-
-    precio_orig = item_json.get("original_price")
-    precio_anterior = _formatear_precio(precio_orig) if precio_orig else ""
-    descuento = ""
-    if precio_orig and precio_num and float(precio_orig) > float(precio_num):
-        pct = round((1 - (float(precio_num) / float(precio_orig))) * 100)
-        if pct >= 5:
-            descuento = f"{pct}% OFF"
-
-    vendidos_num = item_json.get("sold_quantity") or 0
-    vendidos = f"+{vendidos_num} vendidos" if vendidos_num else ""
-
-    atributos = _extraer_atributos_item_api(item_json, nombre)
-
-    return {
-        "item_id": item_id,
-        "nombre": nombre,
-        "precio": precio,
-        "precio_anterior": precio_anterior,
-        "descuento": descuento,
-        "cuotas": "",
-        "ranking": "",
-        "rating": "",
-        "vendidos": vendidos,
-        "url_original": permalink,
-        "imagen_url": imagen_url,
-        "atributos_visuales": atributos,
-        "precio_verificado": True,
-        "precio_fuente": "api_items_oficial",
-    }
 
 
 def _categoria_para_diversidad(producto):
@@ -658,19 +654,11 @@ def _categoria_para_diversidad(producto):
 
 def _puntaje_producto_demanda(producto):
     puntos = 0.0
-    vendidos = limpiar_texto(producto.get("vendidos", "")).lower()
-    m = re.search(r"([\d\.]+)", vendidos)
-    if m:
-        try:
-            n = float(m.group(1).replace(".", ""))
-            puntos += min(n / 100.0, 500.0)
-        except Exception:
-            pass
-
     m = re.search(r"(\d{1,2})%", producto.get("descuento", ""))
     if m:
         puntos += int(m.group(1)) * 2
-
+    if producto.get("cuotas"):
+        puntos += 20
     if producto.get("precio") and producto.get("precio") != "Precio no disponible":
         puntos += 10
     if producto.get("imagen_url"):
@@ -722,12 +710,15 @@ def _seleccionar_tanda_diversa(candidatos, cantidad):
 
 
 def obtener_productos_base():
-    print("--- BUSCANDO 10 PRODUCTOS NUEVOS (DETECCIÓN DE IDs + VALIDACIÓN API /items) ---")
-    token = os.getenv("MELI_ACCESS_TOKEN", "").strip() or MELI_ACCESS_TOKEN
-    print("Token Mercado Libre presente:", "SÍ" if token else "NO")
-
+    print("--- BUSCANDO 10 PRODUCTOS NUEVOS (JSON-LD + TARJETAS WEB) ---")
     historial = cargar_historial_publicados()
     print("Publicaciones ya usadas en el historial:", len(historial))
+
+    # Calentar cookies de sesión visitando la home primero
+    try:
+        safe_get("https://www.mercadolibre.com.ar/", timeout=20)
+    except Exception:
+        pass
 
     nuevos = {}
     OBJETIVO_POOL = max(CANTIDAD_PRODUCTOS * 2, 20)
@@ -736,38 +727,27 @@ def obtener_productos_base():
         _url_busqueda_ml(c) for c in _consultas_ampliadas()
     ]
 
-    ids_evaluados = set()
-
     for url in urls_fuente:
         if len(nuevos) >= OBJETIVO_POOL:
             break
 
-        ids_pagina = _descubrir_item_ids_en_url(url)
-        ids_nuevos = [
-            iid for iid in ids_pagina
-            if iid not in historial and iid not in nuevos and iid not in ids_evaluados
-        ]
-        if not ids_nuevos:
+        try:
+            encontrados = _extraer_productos_html_universal(url)
+        except Exception as e:
+            print("AVISO fuente:", url, "|", e)
             continue
 
-        print(f"IDs detectados en {url}: {len(ids_pagina)} | Nuevos a consultar en API: {len(ids_nuevos)}")
-        ids_evaluados.update(ids_nuevos)
+        if encontrados:
+            print(f"Extraídos en {url}: {len(encontrados)}")
 
-        # Consultamos en lotes de 20 vía API /items
-        items_api = _obtener_items_multiget_api(ids_nuevos[:40])
-        for item_json in items_api:
+        for item_id, producto in encontrados.items():
             if len(nuevos) >= OBJETIVO_POOL:
                 break
-
-            producto = _construir_producto_desde_item_api(item_json)
-            if not producto:
+            if item_id in historial or item_id in nuevos:
                 continue
-
             if not es_producto_permitido(producto):
-                print("DESCARTADO por filtro (alcohol):", producto.get("nombre", ""))
                 continue
 
-            item_id = producto["item_id"]
             nuevos[item_id] = producto
             print(
                 f"CANDIDATO VÁLIDO {len(nuevos)}:",
@@ -835,25 +815,22 @@ def obtener_productos_demanda(maximo=10):
             break
 
         url_busqueda = _url_busqueda_ml(necesidad["consulta"])
-        ids_pagina = _descubrir_item_ids_en_url(url_busqueda)
-        ids_nuevos = [iid for iid in ids_pagina if iid not in historial and iid not in ids]
-        if not ids_nuevos:
+        try:
+            encontrados = _extraer_productos_html_universal(url_busqueda)
+        except Exception:
             continue
 
-        items_api = _obtener_items_multiget_api(ids_nuevos[:20])
-        candidatos = []
-        for item_json in items_api:
-            prod = _construir_producto_desde_item_api(item_json)
-            if prod and es_producto_permitido(prod):
-                prod["consulta_demanda"] = necesidad["consulta"]
-                prod["origen_demanda"] = necesidad.get("origen", "")
-                candidatos.append(prod)
-
+        candidatos = [
+            prod for iid, prod in encontrados.items()
+            if iid not in historial and iid not in ids and es_producto_permitido(prod)
+        ]
         candidatos.sort(key=_puntaje_producto_demanda, reverse=True)
         candidato = candidatos[0] if candidatos else None
         if not candidato:
             continue
 
+        candidato["consulta_demanda"] = necesidad["consulta"]
+        candidato["origen_demanda"] = necesidad.get("origen", "")
         elegidos.append(candidato)
         ids.add(candidato["item_id"])
         lineas_resueltas.append(necesidad["linea"])
