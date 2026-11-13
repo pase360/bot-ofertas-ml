@@ -16,15 +16,14 @@ from PIL import Image, ImageDraw, ImageFont
 
 URL_MAS_VENDIDOS = "https://www.mercadolibre.com.ar/mas-vendidos"
 URL_OFERTAS = "https://www.mercadolibre.com.ar/ofertas"
+API_BASE = "https://api.mercadolibre.com"
 CANTIDAD_PRODUCTOS = 10
 
-# NUEVO: demanda detectada por el agente externo. Cada línea puede ser:
-#   texto buscado
-# o:
-#   texto buscado | URL pública donde apareció la intención de compra
 DEMANDA_PATH = Path("demanda_detectada.txt")
 DEMANDA_PROCESADA_PATH = Path("demanda_procesada.txt")
 REPORTE_DEMANDA_PATH = Path("reporte_demanda.txt")
+
+MELI_ACCESS_TOKEN = os.getenv("MELI_ACCESS_TOKEN", "").strip()
 
 HEADERS = {
     "User-Agent": (
@@ -103,67 +102,19 @@ def limpiar_texto(texto):
 
 
 def limpiar_url(url):
-    """
-    Conserva la query string del enlace. Esto es CLAVE en Mercado Libre:
-    los links de catálogo /p/MLA... pueden traer pdp_filters=item_id:MLA...
-    y ese parámetro identifica la publicación/oferta exacta cuyo precio se
-    muestra en la tarjeta. Antes se borraba todo lo que seguía a '?', lo que
-    podía transformar un link exacto en un catálogo genérico con otro precio.
-    Solo se elimina el fragmento #... del navegador.
-    """
     if not url:
         return ""
-
     url = urljoin("https://www.mercadolibre.com.ar", url)
     partes = urlsplit(url)
     return urlunsplit((partes.scheme, partes.netloc, partes.path, partes.query, ""))
 
 
-def es_producto(url):
-    return bool(url and ("/p/MLA" in url or "/MLA-" in url))
-
-
-def tiene_publicacion_exacta(url):
-    """
-    True cuando el enlace apunta a una publicación concreta y no solo a un
-    catálogo genérico. Acepta:
-      - URLs /MLA-123...
-      - URLs /p/MLA... con item_id:MLA... en la query (pdp_filters, item_id, etc.)
-    """
-    if not url:
-        return False
-
-    inferior = url.lower()
-    if re.search(r"/mla-?\d+", inferior):
-        return True
-
-    query = urlsplit(url).query
-    if not query:
-        return False
-
-    # parseo tolerante: Mercado Libre puede codificar ':' como %3A
-    query_decodificada = requests.utils.unquote(query).lower()
-    return bool(re.search(r"item[_-]?id(?:=|%3d|:)[^&]*mla-?\d+", query_decodificada)
-                or re.search(r"pdp_filters=[^&]*item[_-]?id[^&]*mla-?\d+", query_decodificada))
-
-
-
 def extraer_item_id_url(url):
-    """
-    Extrae el MLA de la publicación exacta desde una URL de Mercado Libre.
-
-    Prioridad:
-    1) item_id dentro de la query/pdp_filters (caso catálogo /p/MLA...)
-    2) wid dentro de la query
-    3) MLA del path solo cuando es una publicación /MLA-...
-    """
     if not url:
         return ""
 
     decodificada = requests.utils.unquote(str(url)).upper()
 
-    # En catálogo, el item exacto viene normalmente en:
-    # pdp_filters=item_id:MLA123... o item_id=MLA123...
     m = re.search(r"ITEM[_-]?ID(?:=|:)[^&]*?(MLA-?\d{7,})", decodificada)
     if m:
         return m.group(1).replace("-", "")
@@ -172,7 +123,6 @@ def extraer_item_id_url(url):
     if m:
         return m.group(1).replace("-", "")
 
-    # Publicación clásica directa /MLA-123... o /MLA123...
     path = urlsplit(str(url)).path.upper()
     m = re.search(r"/(MLA-?\d{7,})(?:-|/|$)", path)
     if m:
@@ -181,29 +131,23 @@ def extraer_item_id_url(url):
     return ""
 
 
-def nombre_desde_url(url):
+def _formatear_precio(numero):
+    if numero is None:
+        return ""
     try:
-        path = urlparse(url).path
-        partes = [parte for parte in path.split("/") if parte]
-        candidato = ""
-
-        for parte in partes:
-            if parte == "p":
-                continue
-            if parte.upper().startswith("MLA"):
-                continue
-            if len(parte) > len(candidato):
-                candidato = parte
-
-        candidato = candidato.replace("-", " ").replace("_", " ")
-        candidato = limpiar_texto(candidato)
-
-        if candidato:
-            return candidato.title()
+        numero = float(numero)
     except Exception:
-        pass
+        return ""
+    if numero <= 0:
+        return ""
 
-    return "Producto Mercado Libre"
+    if abs(numero - round(numero)) < 0.001:
+        entero = int(round(numero))
+        return "$ " + f"{entero:,}".replace(",", ".")
+
+    entero = int(numero)
+    centavos = int(round((numero - entero) * 100))
+    return "$ " + f"{entero:,}".replace(",", ".") + f",{centavos:02d}"
 
 
 # =========================================================
@@ -221,7 +165,6 @@ PALABRAS_ALCOHOL = (
 
 
 def es_producto_permitido(producto):
-    """Excluye alcohol comparando palabras/frases completas."""
     texto = " ".join([
         limpiar_texto(producto.get("nombre", "")),
         limpiar_texto(producto.get("url_original", "")),
@@ -243,151 +186,24 @@ def safe_get(url, timeout=30):
     return response
 
 
-# =========================================================
-# CONTENEDOR DE PRODUCTO EN MÁS VENDIDOS
-# =========================================================
+def api_get(endpoint, params=None, timeout=30):
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": HEADERS["User-Agent"],
+    }
+    token = os.getenv("MELI_ACCESS_TOKEN", "").strip() or MELI_ACCESS_TOKEN
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
 
-def encontrar_contenedor(enlace):
-    nodo = enlace
-    candidatos = []
-
-    for _ in range(10):
-        nodo = nodo.parent
-
-        if not isinstance(nodo, Tag):
-            break
-
-        texto = limpiar_texto(nodo.get_text(" ", strip=True))
-
-        if not texto:
-            continue
-        if len(texto) > 3000:
-            continue
-
-        tiene_precio = "$" in texto
-        tiene_imagen = nodo.find("img") is not None
-        tiene_datos = bool(
-            re.search(
-                r"vendidos|cuotas|%\s*OFF|MÁS VENDIDO|MAS VENDIDO",
-                texto,
-                re.IGNORECASE,
-            )
-        )
-
-        if tiene_precio and tiene_imagen:
-            candidatos.append((nodo, tiene_datos, len(texto)))
-            if tiene_datos:
-                return nodo
-
-    if candidatos:
-        candidatos.sort(key=lambda item: item[2])
-        return candidatos[0][0]
-
-    return enlace.parent
+    url = endpoint if endpoint.startswith("http") else f"{API_BASE}{endpoint}"
+    response = requests.get(url, headers=headers, params=params, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
 
 
 # =========================================================
-# NOMBRE
+# IMAGEN DEL PRODUCTO
 # =========================================================
-
-def obtener_nombre(contenedor, enlace, url):
-    selectores = [
-        ".poly-component__title",
-        ".ui-search-item__title",
-        "[class*='product-title']",
-        "[class*='item-title']",
-        "h2",
-        "h3",
-    ]
-
-    for selector in selectores:
-        try:
-            elementos = contenedor.select(selector)
-        except Exception:
-            elementos = []
-
-        for elemento in elementos:
-            texto = limpiar_texto(elemento.get_text(" ", strip=True))
-            inferior = texto.lower()
-
-            if not 8 <= len(texto) <= 220:
-                continue
-            if "$" in texto:
-                continue
-            if "off" in inferior:
-                continue
-            if "más vendido" in inferior or "mas vendido" in inferior:
-                continue
-            if "envío gratis" in inferior or "envio gratis" in inferior:
-                continue
-
-            return texto
-
-    for atributo in ["title", "aria-label"]:
-        valor = limpiar_texto(enlace.get(atributo, ""))
-        if 8 <= len(valor) <= 220:
-            return valor
-
-    for imagen in contenedor.find_all("img"):
-        alt = limpiar_texto(imagen.get("alt", ""))
-        if 8 <= len(alt) <= 220 and "$" not in alt:
-            return alt
-
-    return nombre_desde_url(url)
-
-
-# =========================================================
-# IMAGEN DEL PRODUCTO DESDE MÁS VENDIDOS
-# =========================================================
-
-def obtener_url_imagen(contenedor):
-    """
-    Toma la foto del producto de la tarjeta de Más vendidos.
-    NO usa imágenes de la publicación individual, para evitar volver a
-    capturar logos de Mercado Libre / Mercado Pago por error.
-    """
-    candidatos = []
-
-    for imagen in contenedor.find_all("img"):
-        alt = limpiar_texto(imagen.get("alt", "")).lower()
-
-        urls = []
-        for atributo in ["data-src", "data-lazy", "src"]:
-            url = imagen.get(atributo)
-            if url and url.startswith("http"):
-                urls.append(url)
-
-        srcset = imagen.get("srcset")
-        if srcset:
-            for opcion in srcset.split(","):
-                url = opcion.strip().split(" ")[0]
-                if url.startswith("http"):
-                    urls.append(url)
-
-        for url in urls:
-            inferior = url.lower()
-
-            if ".svg" in inferior:
-                continue
-            if any(p in inferior for p in ["logo", "icon", "sprite", "brand", "favicon"]):
-                continue
-
-            puntos = 0
-            if "mlstatic.com" in inferior:
-                puntos += 5
-            if "d_nq_np" in inferior or "d_nq_nn" in inferior:
-                puntos += 5
-            if alt:
-                puntos += 1
-
-            candidatos.append((puntos, url))
-
-    if not candidatos:
-        return ""
-
-    candidatos.sort(key=lambda x: x[0], reverse=True)
-    return candidatos[0][1]
-
 
 def descargar_imagen(url):
     if not url:
@@ -403,18 +219,12 @@ def descargar_imagen(url):
 
 
 def quitar_fondo_blanco_conectado(imagen):
-    """
-    Quita solo el fondo blanco/casi blanco conectado a los bordes.
-    Es más seguro que borrar todos los píxeles blancos, porque conserva
-    partes blancas internas del producto.
-    """
     if imagen is None:
         return None
 
     img = imagen.convert("RGBA")
     w, h = img.size
 
-    # Evita procesar imágenes enormes pixel a pixel.
     max_lado = 1100
     if max(w, h) > max_lado:
         escala = max_lado / max(w, h)
@@ -432,7 +242,6 @@ def quitar_fondo_blanco_conectado(imagen):
         r, g, b, a = px[x, y]
         if a == 0:
             return True
-        # blanco o casi blanco, sin mucha diferencia entre canales
         return r >= 246 and g >= 246 and b >= 246 and (max(r, g, b) - min(r, g, b)) <= 8
 
     def agregar(x, y):
@@ -470,598 +279,16 @@ def quitar_fondo_blanco_conectado(imagen):
 
 
 # =========================================================
-# PRECIOS
+# ATRIBUTOS REALES DE LA PUBLICACIÓN
 # =========================================================
 
-def leer_money_amount(elemento):
-    if not elemento:
-        return ""
-
-    fraction = elemento.select_one(".andes-money-amount__fraction")
-    cents = elemento.select_one(".andes-money-amount__cents")
-
-    if fraction:
-        entero = limpiar_texto(fraction.get_text())
-        if cents:
-            centavos = limpiar_texto(cents.get_text())
-            if centavos:
-                return "$ " + entero + "," + centavos
-        return "$ " + entero
-
-    texto = limpiar_texto(elemento.get_text(" ", strip=True))
-    match = re.search(r"\$\s*([\d\.]+(?:,\d+)?)", texto)
-
-    if match:
-        return "$ " + match.group(1)
-
-    return ""
-
-
-def extraer_importes_texto(texto):
-    encontrados = re.findall(r"\$\s*([\d\.]+(?:,\d+)?)", texto)
-    resultado = []
-
-    for valor in encontrados:
-        importe = "$ " + valor
-        if importe not in resultado:
-            resultado.append(importe)
-
-    return resultado
-
-
-def _es_precio_anterior(elemento):
-    nodo = elemento
-    for _ in range(6):
-        if nodo is None or not isinstance(nodo, Tag):
-            break
-
-        clases = " ".join(nodo.get("class", []))
-        attrs = " ".join(str(nodo.get(k, "")) for k in ("id", "data-testid", "aria-label"))
-        marca = (clases + " " + attrs).lower()
-
-        if getattr(nodo, "name", "") == "s":
-            return True
-
-        if any(x in marca for x in (
-            "previous", "original", "strikethrough", "old-price",
-            "price-before", "list-price"
-        )):
-            return True
-
-        nodo = nodo.parent
-
-    return False
-
-
-def _primer_precio_actual(nodos, precio_anterior=""):
-    for nodo in nodos:
-        if _es_precio_anterior(nodo):
-            continue
-
-        valor = leer_money_amount(nodo)
-        if not valor:
-            continue
-
-        if precio_anterior and valor == precio_anterior:
-            continue
-
-        return valor
-
-    return ""
-
-
-def obtener_precios(contenedor, texto, descuento):
-    """
-    Lee el precio ACTUAL mostrado en la misma tarjeta del producto.
-    Nunca toma el precio tachado/original y nunca aproxima por texto libre.
-    """
-    precio_anterior = ""
-
-    for selector in (
-        ".andes-money-amount--previous",
-        ".poly-price__original .andes-money-amount",
-        ".ui-search-price__original-value .andes-money-amount",
-        "[class*='original'] .andes-money-amount",
-        "[class*='previous'] .andes-money-amount",
-    ):
-        try:
-            nodos = contenedor.select(selector)
-        except Exception:
-            nodos = []
-
-        for nodo in nodos:
-            valor = leer_money_amount(nodo)
-            if valor:
-                precio_anterior = valor
-                break
-        if precio_anterior:
-            break
-
-    # Prioridad: bloques semánticos de precio actual.
-    for selector in (
-        ".poly-price__current .andes-money-amount",
-        ".ui-search-price__second-line .andes-money-amount",
-        "[data-testid='price-part'] .andes-money-amount",
-        "[class*='current'] .andes-money-amount",
-        ".poly-component__price .andes-money-amount",
-    ):
-        try:
-            nodos = contenedor.select(selector)
-        except Exception:
-            nodos = []
-
-        precio = _primer_precio_actual(nodos, precio_anterior)
-        if precio:
-            return precio, precio_anterior
-
-    # Último respaldo: primer money amount de ESA tarjeta que no sea anterior.
-    # No se usa el texto completo ni la regla de "segundo precio si hay OFF".
-    try:
-        nodos = contenedor.select(".andes-money-amount")
-    except Exception:
-        nodos = []
-
-    precio = _primer_precio_actual(nodos, precio_anterior)
-    if precio:
-        return precio, precio_anterior
-
-    return "Precio no disponible", precio_anterior
-
-
-# =========================================================
-# DATOS DE LA TARJETA DE MÁS VENDIDOS
-# =========================================================
-
-def extraer_datos_tarjeta(enlace, contenedor):
-    url = limpiar_url(enlace.get("href"))
-    texto = limpiar_texto(contenedor.get_text(" ", strip=True))
-    nombre = obtener_nombre(contenedor, enlace, url)
-
-    descuento = ""
-    match = re.search(r"(\d{1,2}%\s*OFF)", texto, re.IGNORECASE)
-    if match:
-        descuento = match.group(1).upper()
-
-    precio, precio_anterior = obtener_precios(contenedor, texto, descuento)
-
-    cuotas = ""
-    patrones_cuotas = [
-        r"((?:Mismo precio(?: en)?\s+)?\d{1,2}\s+cuotas(?:\s+sin\s+inter[eé]s)?(?:\s+de\s+\$\s*[\d\.\,]+)?)",
-        r"(\d{1,2}\s+cuotas(?:\s+de\s+\$\s*[\d\.\,]+)?)",
-    ]
-
-    for patron in patrones_cuotas:
-        match = re.search(patron, texto, re.IGNORECASE)
-        if match:
-            cuotas = limpiar_texto(match.group(1))
-            break
-
-    if not cuotas:
-        cuotas = ""
-
-    ranking = ""
-    match = re.search(
-        r"(\d{1,2})\s*[º°]\s*(?:MÁS|MAS)\s+VENDIDO",
-        texto,
-        re.IGNORECASE,
-    )
-    if match:
-        ranking = match.group(1) + "º MÁS VENDIDO"
-
-    rating = ""
-    for selector in [
-        ".poly-reviews__rating",
-        ".ui-search-reviews__rating-number",
-        "[class*='rating']",
-    ]:
-        elemento = contenedor.select_one(selector)
-        if not elemento:
-            continue
-
-        texto_rating = limpiar_texto(elemento.get_text(" ", strip=True))
-        match = re.search(r"\b([1-5](?:[\.,]\d)?)\b", texto_rating)
-        if match:
-            rating = match.group(1).replace(",", ".")
-            break
-
-    vendidos = ""
-    match = re.search(
-        r"(\+?\s*[\d\.]+\s*(?:mil)?\s+(?:productos\s+)?vendidos)",
-        texto,
-        re.IGNORECASE,
-    )
-    if match:
-        vendidos = limpiar_texto(match.group(1))
-
-    imagen_url = obtener_url_imagen(contenedor)
-
-    return {
-        "url_original": url,
-        "nombre": nombre,
-        "precio": precio,
-        "precio_anterior": precio_anterior,
-        "descuento": descuento,
-        "cuotas": cuotas,
-        "ranking": ranking,
-        "rating": rating,
-        "vendidos": vendidos,
-        "imagen_url": imagen_url,
-        "atributos_visuales": [],
-    }
-
-
-# =========================================================
-# TEXTO REAL DE LA PUBLICACIÓN INDIVIDUAL
-# =========================================================
-
-def extraer_publicacion(url):
-    try:
-        response = safe_get(url, timeout=30)
-        soup = BeautifulSoup(response.text, "html.parser")
-        texto = limpiar_texto(soup.get_text(" ", strip=True))
-        return soup, texto
-    except Exception as e:
-        print("ERROR leyendo publicación:", url, e)
-        return None, ""
-
-
-def extraer_json_ld(soup):
-    if not soup:
-        return []
-
-    encontrados = []
-
-    for script in soup.find_all("script", type="application/ld+json"):
-        contenido = script.string or script.get_text(strip=True)
-        if not contenido:
-            continue
-
-        try:
-            data = json.loads(contenido)
-        except Exception:
-            continue
-
-        if isinstance(data, list):
-            encontrados.extend([x for x in data if isinstance(x, dict)])
-        elif isinstance(data, dict):
-            encontrados.append(data)
-
-    return encontrados
-
-
-# =========================================================
-# PRECIO ACTUAL VERIFICADO DE LA PUBLICACIÓN INDIVIDUAL
-# =========================================================
-
-def _iterar_json(obj):
-    if isinstance(obj, dict):
-        yield obj
-        for valor in obj.values():
-            yield from _iterar_json(valor)
-    elif isinstance(obj, list):
-        for item in obj:
-            yield from _iterar_json(item)
-
-
-def _normalizar_numero_precio(valor):
-    if valor is None:
-        return None
-
-    if isinstance(valor, (int, float)):
-        return float(valor)
-
-    texto = limpiar_texto(valor)
-    if not texto:
-        return None
-
-    texto = texto.replace("$", "").replace(" ", "")
-
-    # AR: 44.155,50 -> 44155.50
-    if "," in texto:
-        texto = texto.replace(".", "").replace(",", ".")
-    else:
-        # si solo hay puntos y el último grupo tiene 3 dígitos,
-        # se consideran separadores de miles
-        partes = texto.split(".")
-        if len(partes) > 1 and all(p.isdigit() for p in partes):
-            if len(partes[-1]) == 3:
-                texto = "".join(partes)
-
-    texto = re.sub(r"[^0-9.]", "", texto)
-
-    try:
-        numero = float(texto)
-    except Exception:
-        return None
-
-    if numero <= 0:
-        return None
-
-    return numero
-
-
-def _formatear_precio(numero):
-    if numero is None:
-        return ""
-
-    if abs(numero - round(numero)) < 0.001:
-        entero = int(round(numero))
-        return "$ " + f"{entero:,}".replace(",", ".")
-
-    entero = int(numero)
-    centavos = int(round((numero - entero) * 100))
-    return "$ " + f"{entero:,}".replace(",", ".") + f",{centavos:02d}"
-
-
-def precio_desde_json_ld(soup):
-    """Busca el precio ACTUAL estructurado del Product/Offer."""
-    if not soup:
-        return ""
-
-    for item in extraer_json_ld(soup):
-        for nodo in _iterar_json(item):
-            tipo = nodo.get("@type")
-            tipos = tipo if isinstance(tipo, list) else [tipo]
-            tipos = [str(x).lower() for x in tipos if x]
-
-            # Product -> offers
-            if "product" in tipos:
-                offers = nodo.get("offers")
-                if isinstance(offers, dict):
-                    offers = [offers]
-                if isinstance(offers, list):
-                    for offer in offers:
-                        if not isinstance(offer, dict):
-                            continue
-                        for clave in ("price", "lowPrice"):
-                            numero = _normalizar_numero_precio(offer.get(clave))
-                            if numero is not None:
-                                return _formatear_precio(numero)
-
-            # Offer directo
-            if "offer" in tipos or "aggregateoffer" in tipos:
-                for clave in ("price", "lowPrice"):
-                    numero = _normalizar_numero_precio(nodo.get(clave))
-                    if numero is not None:
-                        return _formatear_precio(numero)
-
-    return ""
-
-
-def precio_desde_meta(soup):
-    if not soup:
-        return ""
-
-    selectores = [
-        "meta[itemprop='price'][content]",
-        "meta[property='product:price:amount'][content]",
-        "meta[property='og:price:amount'][content]",
-        "[itemprop='price'][content]",
-    ]
-
-    for selector in selectores:
-        try:
-            nodos = soup.select(selector)
-        except Exception:
-            nodos = []
-
-        for nodo in nodos:
-            numero = _normalizar_numero_precio(nodo.get("content"))
-            if numero is not None:
-                return _formatear_precio(numero)
-
-    return ""
-
-
-def _es_precio_anterior(elemento):
-    nodo = elemento
-    for _ in range(5):
-        if nodo is None or not isinstance(nodo, Tag):
-            break
-        clases = " ".join(nodo.get("class", []))
-        inferior = clases.lower()
-        if any(x in inferior for x in ("previous", "original", "strikethrough")):
-            return True
-        nodo = nodo.parent
-    return False
-
-
-def precio_desde_dom_actual(soup):
-    """Último respaldo: solo nodos de precio actual, nunca previous/original."""
-    if not soup:
-        return ""
-
-    selectores = [
-        ".ui-pdp-price__second-line .andes-money-amount",
-        ".ui-pdp-price__main-container .andes-money-amount",
-        "[data-testid='price-part'] .andes-money-amount",
-    ]
-
-    for selector in selectores:
-        try:
-            nodos = soup.select(selector)
-        except Exception:
-            nodos = []
-
-        for nodo in nodos:
-            if _es_precio_anterior(nodo):
-                continue
-            valor = leer_money_amount(nodo)
-            numero = _normalizar_numero_precio(valor)
-            if numero is not None:
-                return _formatear_precio(numero)
-
-    return ""
-
-
-
-def precio_oferta_exacta_desde_json_ld(soup, item_id=""):
-    """
-    Busca SOLO el precio de una Offer concreta de la publicación.
-
-    IMPORTANTE:
-    - NO usa AggregateOffer.lowPrice ni lowPrice ("desde").
-    - NO usa precios anteriores/originales.
-    - Si puede identificar item_id/SKU en la oferta, exige coincidencia.
-    - Si existe una única Offer concreta con price, puede usarla.
-    """
-    if not soup:
-        return ""
-
-    item_id = limpiar_texto(item_id).upper()
-    ofertas = []
-
-    for item in extraer_json_ld(soup):
-        for nodo in _iterar_json(item):
-            tipo = nodo.get("@type")
-            tipos = tipo if isinstance(tipo, list) else [tipo]
-            tipos = [str(x).lower() for x in tipos if x]
-
-            # AggregateOffer describe el catálogo ("desde"). Se ignora completo.
-            if "aggregateoffer" in tipos:
-                continue
-
-            if "offer" in tipos:
-                numero = _normalizar_numero_precio(nodo.get("price"))
-                if numero is None:
-                    continue
-
-                identificadores = " ".join(
-                    limpiar_texto(nodo.get(k, ""))
-                    for k in ("sku", "item_id", "itemId", "id", "url")
-                ).upper()
-
-                ofertas.append((numero, identificadores))
-
-            # Product puede contener una Offer concreta.
-            if "product" in tipos:
-                offers = nodo.get("offers")
-                if isinstance(offers, dict):
-                    offers = [offers]
-                if isinstance(offers, list):
-                    for offer in offers:
-                        if not isinstance(offer, dict):
-                            continue
-                        otipo = offer.get("@type")
-                        otipos = otipo if isinstance(otipo, list) else [otipo]
-                        otipos = [str(x).lower() for x in otipos if x]
-                        if "aggregateoffer" in otipos:
-                            continue
-                        numero = _normalizar_numero_precio(offer.get("price"))
-                        if numero is None:
-                            continue
-                        identificadores = " ".join(
-                            limpiar_texto(offer.get(k, ""))
-                            for k in ("sku", "item_id", "itemId", "id", "url")
-                        ).upper()
-                        ofertas.append((numero, identificadores))
-
-    if item_id:
-        for numero, identificadores in ofertas:
-            if item_id in identificadores:
-                return _formatear_precio(numero)
-
-    # Una sola oferta concreta: no hay ambigüedad de "desde".
-    unicos = []
-    for numero, _ in ofertas:
-        if numero not in unicos:
-            unicos.append(numero)
-    if len(unicos) == 1:
-        return _formatear_precio(unicos[0])
-
-    return ""
-
-
-def precio_oferta_exacta_desde_dom(soup):
-    """
-    Lee el precio principal visible de la oferta seleccionada.
-    Evita bloques de 'otras opciones', 'desde', precios anteriores y cuotas.
-    """
-    if not soup:
-        return ""
-
-    selectores = [
-        ".ui-pdp-price__main-container .ui-pdp-price__second-line .andes-money-amount",
-        ".ui-pdp-price__second-line .andes-money-amount",
-        "[data-testid='price-part'] .andes-money-amount",
-    ]
-
-    for selector in selectores:
-        try:
-            nodos = soup.select(selector)
-        except Exception:
-            nodos = []
-
-        for nodo in nodos:
-            if _es_precio_anterior(nodo):
-                continue
-
-            # Rechaza si el nodo vive dentro de una zona que indica catálogo,
-            # otras opciones o financiación.
-            padre = nodo
-            contexto = ""
-            for _ in range(6):
-                if padre is None or not isinstance(padre, Tag):
-                    break
-                contexto += " " + limpiar_texto(padre.get_text(" ", strip=True)).lower()
-                clases = " ".join(padre.get("class", [])).lower()
-                contexto += " " + clases
-                padre = padre.parent
-
-            if any(x in contexto for x in (
-                "otras opciones de compra",
-                "más opciones desde",
-                "mas opciones desde",
-                "productos nuevos desde",
-                "cuotas de",
-            )):
-                continue
-
-            valor = leer_money_amount(nodo)
-            numero = _normalizar_numero_precio(valor)
-            if numero is not None:
-                return _formatear_precio(numero)
-
-    return ""
-
-
-def obtener_precio_publicacion_exacta(soup, item_id=""):
-    """
-    Precio de LA publicación/oferta enlazada.
-    Nunca devuelve lowPrice/precio mínimo de catálogo.
-    """
-    precio = precio_oferta_exacta_desde_json_ld(soup, item_id)
-    if precio:
-        return precio
-
-    precio = precio_oferta_exacta_desde_dom(soup)
-    if precio:
-        return precio
-
-    # Meta price solo se acepta como último respaldo porque suele describir
-    # la oferta seleccionada, no el mínimo AggregateOffer.
-    precio = precio_desde_meta(soup)
-    if precio:
-        return precio
-
-    return ""
-
-
-def obtener_precio_actual_verificado(soup):
-    """
-    Devuelve SOLO un precio actual verificable.
-    No usa el primer número del texto de la página y no aproxima.
-    """
-    for extractor in (
-        precio_desde_json_ld,
-        precio_desde_meta,
-        precio_desde_dom_actual,
-    ):
-        precio = extractor(soup)
-        if precio:
-            return precio
-
-    return ""
+def normalizar_atributo(texto):
+    texto = limpiar_texto(texto)
+    texto = re.sub(r"\s*:\s*", ": ", texto)
+    palabras = texto.split()
+    if len(palabras) > 7:
+        texto = " ".join(palabras[:7])
+    return texto.strip(" -–—:;")
 
 
 def es_texto_util_atributo(texto, nombre_producto=""):
@@ -1070,137 +297,26 @@ def es_texto_util_atributo(texto, nombre_producto=""):
         return False
 
     inferior = texto.lower()
-
     if len(texto) < 3 or len(texto) > 55:
         return False
 
     prohibidos = [
-        "mercado libre",
-        "mercado pago",
-        "comprar",
-        "oferta",
-        "envío",
-        "envio",
-        "devolución",
-        "devolucion",
-        "stock",
-        "cuotas",
-        "medios de pago",
-        "vendidos",
-        "opiniones",
-        "preguntas",
-        "publicación",
-        "publicacion",
-        "más información",
-        "mas información",
-        "ver más",
-        "ver mas",
-        "carrito",
-        "iniciar sesión",
-        "iniciar sesion",
+        "mercado libre", "mercado pago", "comprar", "oferta",
+        "envío", "envio", "devolución", "devolucion", "stock",
+        "cuotas", "medios de pago", "vendidos", "opiniones",
+        "preguntas", "publicación", "publicacion", "marca genérica",
+        "no aplica", "sin marca", "universal"
     ]
-
     if any(p in inferior for p in prohibidos):
         return False
-
     if "$" in texto or "%" in texto:
         return False
-
-    # Evita repetir el título completo como característica.
     if nombre_producto and limpiar_texto(nombre_producto).lower() == inferior:
         return False
-
     return True
 
 
-def normalizar_atributo(texto):
-    texto = limpiar_texto(texto)
-    texto = re.sub(r"\s*:\s*", ": ", texto)
-
-    # Acorta frases muy largas sin inventar contenido.
-    palabras = texto.split()
-    if len(palabras) > 7:
-        texto = " ".join(palabras[:7])
-
-    return texto.strip(" -–—:;")
-
-
-def atributos_desde_json_ld(soup, nombre_producto):
-    resultado = []
-
-    for item in extraer_json_ld(soup):
-        adicionales = item.get("additionalProperty")
-        if not adicionales:
-            continue
-
-        if isinstance(adicionales, dict):
-            adicionales = [adicionales]
-
-        if not isinstance(adicionales, list):
-            continue
-
-        for prop in adicionales:
-            if not isinstance(prop, dict):
-                continue
-
-            nombre = limpiar_texto(prop.get("name", ""))
-            valor = limpiar_texto(prop.get("value", ""))
-
-            if nombre and valor:
-                texto = f"{nombre}: {valor}"
-            else:
-                texto = valor or nombre
-
-            texto = normalizar_atributo(texto)
-
-            if es_texto_util_atributo(texto, nombre_producto) and texto not in resultado:
-                resultado.append(texto)
-
-            if len(resultado) >= 3:
-                return resultado
-
-    return resultado
-
-
-def atributos_desde_html(soup, nombre_producto):
-    resultado = []
-
-    if not soup:
-        return resultado
-
-    selectores = [
-        ".ui-vpp-highlighted-specs__features li",
-        ".ui-pdp-highlights__content li",
-        ".ui-pdp-specs__table tr",
-        ".andes-table__row",
-        "table tr",
-        "[class*='specs'] li",
-        "[class*='highlight'] li",
-    ]
-
-    for selector in selectores:
-        try:
-            nodos = soup.select(selector)
-        except Exception:
-            nodos = []
-
-        for nodo in nodos:
-            texto = normalizar_atributo(nodo.get_text(" ", strip=True))
-
-            if es_texto_util_atributo(texto, nombre_producto) and texto not in resultado:
-                resultado.append(texto)
-
-            if len(resultado) >= 3:
-                return resultado
-
-    return resultado
-
-
 def atributos_desde_titulo(titulo):
-    """
-    Último respaldo: extrae expresiones que están literalmente presentes
-    en el título real del producto. No inventa características.
-    """
     t = limpiar_texto(titulo)
     tl = t.lower()
     resultado = []
@@ -1225,19 +341,13 @@ def atributos_desde_titulo(titulo):
 
     for patron, salida in patrones:
         for m in re.finditer(patron, t, re.IGNORECASE):
-            if callable(salida):
-                texto = salida(m)
-            else:
-                texto = salida
-
+            texto = salida(m) if callable(salida) else salida
             texto = limpiar_texto(texto)
             if texto and texto.lower() not in [x.lower() for x in resultado]:
                 resultado.append(texto)
-
             if len(resultado) >= 3:
                 return resultado
 
-    # Si todavía falta, toma fragmentos reales del título sin inventarlos.
     palabras = t.split()
     stop = {
         "para", "con", "sin", "de", "del", "la", "el", "los", "las",
@@ -1246,9 +356,7 @@ def atributos_desde_titulo(titulo):
 
     for palabra in palabras:
         limpia = palabra.strip(",.;:()[]-/")
-        if len(limpia) < 4:
-            continue
-        if limpia.lower() in stop:
+        if len(limpia) < 4 or limpia.lower() in stop:
             continue
         if limpia.lower() in tl and limpia.lower() not in [x.lower() for x in resultado]:
             resultado.append(limpia.capitalize())
@@ -1258,402 +366,62 @@ def atributos_desde_titulo(titulo):
     return resultado[:3]
 
 
-def obtener_atributos_reales_publicacion(soup, titulo):
+def _extraer_atributos_item_api(item_json, titulo):
     resultado = []
+    atributos = item_json.get("attributes") or []
+    prioritarios = {"BRAND", "MODEL", "COLOR", "CAPACITY", "POWER", "MATERIAL", "VOLUME_CAPACITY", "WEIGHT"}
 
-    for fuente_resultados in [
-        atributos_desde_json_ld(soup, titulo),
-        atributos_desde_html(soup, titulo),
-        atributos_desde_titulo(titulo),
-    ]:
-        for texto in fuente_resultados:
-            texto = normalizar_atributo(texto)
-            if not texto:
-                continue
-            if texto.lower() not in [x.lower() for x in resultado]:
-                resultado.append(texto)
+    for attr in atributos:
+        if attr.get("id") in prioritarios:
+            nombre = limpiar_texto(attr.get("name", ""))
+            valor = limpiar_texto(attr.get("value_name", ""))
+            if nombre and valor:
+                texto = normalizar_atributo(f"{nombre}: {valor}")
+                if es_texto_util_atributo(texto, titulo) and texto not in resultado:
+                    resultado.append(texto)
             if len(resultado) >= 3:
                 return resultado
+
+    for attr in atributos:
+        nombre = limpiar_texto(attr.get("name", ""))
+        valor = limpiar_texto(attr.get("value_name", ""))
+        if nombre and valor:
+            texto = normalizar_atributo(f"{nombre}: {valor}")
+            if es_texto_util_atributo(texto, titulo) and texto not in resultado:
+                resultado.append(texto)
+        if len(resultado) >= 3:
+            return resultado
+
+    if len(resultado) < 3:
+        for extra in atributos_desde_titulo(titulo):
+            if extra.lower() not in [x.lower() for x in resultado]:
+                resultado.append(extra)
+            if len(resultado) >= 3:
+                break
 
     return resultado[:3]
 
 
-def enriquecer_solo_textos_reales(datos):
-    """
-    Consulta la publicación EXACTA que luego se enviará a Automate.
+def _mejor_imagen_api(item_json, fallback_thumb=""):
+    pictures = item_json.get("pictures") or []
+    if pictures and isinstance(pictures, list):
+        pic = pictures[0]
+        if isinstance(pic, dict):
+            url = pic.get("secure_url") or pic.get("url") or ""
+            if url:
+                return url
 
-    REGLA DE SEGURIDAD:
-    - conserva el link exacto y la foto ya asociados al item;
-    - obtiene características reales de la publicación;
-    - REEMPLAZA el precio de la tarjeta/listado por el precio actual verificable
-      de la publicación individual;
-    - si el precio actual no puede verificarse, el producto NO se considera apto
-      para publicar. Es preferible detener la tanda antes que publicar un precio
-      dudoso.
-    """
-    imagen_original = datos.get("imagen_url", "")
-    url_original = datos.get("url_original", "")
-
-    soup, _ = extraer_publicacion(url_original)
-
-    if not soup:
-        raise ValueError(
-            f"No se pudo abrir la publicación exacta para verificar precio: {url_original}"
-        )
-
-    precio_verificado = obtener_precio_actual_verificado(soup)
-    if not precio_verificado:
-        raise ValueError(
-            f"No se pudo verificar el precio actual de la publicación: {url_original}"
-        )
-
-    atributos = obtener_atributos_reales_publicacion(soup, datos["nombre"])
-    datos["atributos_visuales"] = atributos or atributos_desde_titulo(datos["nombre"])
-
-    # Link, foto y precio quedan unidos al mismo producto.
-    datos["imagen_url"] = imagen_original
-    datos["url_original"] = url_original
-    datos["precio"] = precio_verificado
-    datos["precio_verificado"] = True
-
-    print(
-        "PRECIO VERIFICADO:",
-        datos.get("item_id", ""),
-        "|",
-        datos.get("nombre", ""),
-        "|",
-        precio_verificado,
-    )
-    return datos
+    thumb = item_json.get("thumbnail") or fallback_thumb or ""
+    if thumb:
+        thumb = re.sub(r"-I(\.[a-zA-Z0-9]+)$", r"-O\1", thumb)
+        if thumb.startswith("http://"):
+            thumb = "https://" + thumb[7:]
+    return thumb
 
 
 # =========================================================
-# OBTENER PRODUCTOS
+# HISTORIAL
 # =========================================================
-
-
-# =========================================================
-# RESULTADOS EMBEBIDOS DE MERCADO LIBRE
-# =========================================================
-
-def _iterar_diccionarios(obj):
-    """Recorre cualquier JSON y devuelve todos sus diccionarios."""
-    if isinstance(obj, dict):
-        yield obj
-        for valor in obj.values():
-            yield from _iterar_diccionarios(valor)
-    elif isinstance(obj, list):
-        for valor in obj:
-            yield from _iterar_diccionarios(valor)
-
-
-def _cargar_json_de_script(texto):
-    """
-    Mercado Libre puede incrustar JSON puro o una asignación JS que contiene
-    un objeto JSON. Devuelve todos los objetos que pueda decodificar sin
-    ejecutar JavaScript.
-    """
-    if not texto:
-        return []
-
-    texto = texto.strip()
-    resultados = []
-
-    # JSON puro.
-    try:
-        resultados.append(json.loads(texto))
-        return resultados
-    except Exception:
-        pass
-
-    # Asignaciones tipo window.__STATE__ = {...};
-    decoder = json.JSONDecoder()
-    posiciones = [i for i, ch in enumerate(texto) if ch in "{["]
-    # Probar solo los primeros comienzos razonables para no hacer un O(n²)
-    # sobre scripts gigantes.
-    for pos in posiciones[:30]:
-        try:
-            obj, _ = decoder.raw_decode(texto[pos:])
-            resultados.append(obj)
-            break
-        except Exception:
-            continue
-
-    return resultados
-
-
-def _extraer_item_id_dict(d):
-    for clave in ("item_id", "itemId", "itemID"):
-        valor = d.get(clave)
-        if isinstance(valor, str) and re.fullmatch(r"MLA\d{7,}", valor):
-            return valor
-
-    # Algunos resultados usan simplemente id para el item. Solo se acepta si
-    # el mismo objeto también parece un resultado comercial (precio/título).
-    valor = d.get("id")
-    if (
-        isinstance(valor, str)
-        and re.fullmatch(r"MLA\d{9,}", valor)
-        and any(k in d for k in ("price", "title", "permalink", "thumbnail"))
-    ):
-        return valor
-
-    return ""
-
-
-def _extraer_catalog_id_dict(d):
-    for clave in (
-        "catalog_product_id", "catalogProductId", "catalog_product",
-        "product_id", "productId"
-    ):
-        valor = d.get(clave)
-        if isinstance(valor, str) and re.fullmatch(r"MLA\d{6,}", valor):
-            return valor
-        if isinstance(valor, dict):
-            for sub in ("id", "product_id"):
-                v = valor.get(sub)
-                if isinstance(v, str) and re.fullmatch(r"MLA\d{6,}", v):
-                    return v
-    return ""
-
-
-def _extraer_user_product_id_dict(d):
-    for clave in ("user_product_id", "userProductId"):
-        valor = d.get(clave)
-        if isinstance(valor, str) and re.fullmatch(r"MLAU\d+", valor):
-            return valor
-    return ""
-
-
-def _precio_numerico_desde_valor(valor):
-    if isinstance(valor, (int, float)) and valor > 0:
-        return float(valor)
-
-    if isinstance(valor, str):
-        return _normalizar_numero_precio(valor)
-
-    if isinstance(valor, dict):
-        # Solo precio ACTUAL. Nunca original/list/previous.
-        for clave in ("amount", "value", "current_price", "currentPrice"):
-            if clave in valor:
-                n = _precio_numerico_desde_valor(valor.get(clave))
-                if n:
-                    return n
-    return None
-
-
-def _extraer_precio_actual_dict(d):
-    # Prioridad a nombres explícitos de precio actual.
-    for clave in ("price", "current_price", "currentPrice", "sale_price", "salePrice"):
-        if clave in d:
-            n = _precio_numerico_desde_valor(d.get(clave))
-            if n:
-                return n
-
-    # Estructuras anidadas comunes de polycards.
-    for clave in ("prices", "price_data", "priceData"):
-        bloque = d.get(clave)
-        if isinstance(bloque, dict):
-            for sub in ("price", "current_price", "currentPrice", "sale_price", "amount"):
-                if sub in bloque:
-                    n = _precio_numerico_desde_valor(bloque.get(sub))
-                    if n:
-                        return n
-
-    return None
-
-
-def _extraer_titulo_dict(d):
-    for clave in ("title", "name"):
-        valor = d.get(clave)
-        if isinstance(valor, str):
-            valor = limpiar_texto(valor)
-            if 5 <= len(valor) <= 250:
-                return valor
-    return ""
-
-
-def _extraer_imagen_dict(d):
-    candidatos = []
-
-    for clave in ("thumbnail", "thumbnail_url", "thumbnailUrl", "image", "picture"):
-        valor = d.get(clave)
-        if isinstance(valor, str):
-            candidatos.append(valor)
-        elif isinstance(valor, dict):
-            for sub in ("url", "secure_url", "src"):
-                v = valor.get(sub)
-                if isinstance(v, str):
-                    candidatos.append(v)
-
-    pictures = d.get("pictures")
-    if isinstance(pictures, list):
-        for pic in pictures[:3]:
-            if isinstance(pic, str):
-                candidatos.append(pic)
-            elif isinstance(pic, dict):
-                for sub in ("url", "secure_url", "src"):
-                    v = pic.get(sub)
-                    if isinstance(v, str):
-                        candidatos.append(v)
-
-    for url in candidatos:
-        if not isinstance(url, str):
-            continue
-        url = url.replace("\\/", "/")
-        if url.startswith("//"):
-            url = "https:" + url
-        if not url.startswith("http"):
-            continue
-        inferior = url.lower()
-        if any(x in inferior for x in ("logo", "icon", "sprite", "favicon")):
-            continue
-        if "mlstatic" in inferior or "http" in inferior:
-            return url
-
-    return ""
-
-
-def extraer_resultados_embebidos(soup):
-    """
-    Extrae el item_id, precio y demás datos del array de resultados que
-    Mercado Libre incrusta en la propia página. Esto evita depender de que el
-    href visible de la tarjeta sea /p/MLA... (catálogo) o una publicación.
-    """
-    resultados = []
-    vistos = set()
-
-    for script in soup.find_all("script"):
-        texto = script.string or script.get_text("", strip=False)
-        if not texto or "MLA" not in texto:
-            continue
-
-        for raiz in _cargar_json_de_script(texto):
-            for d in _iterar_diccionarios(raiz):
-                item_id = _extraer_item_id_dict(d)
-                if not item_id or item_id in vistos:
-                    continue
-
-                precio_num = _extraer_precio_actual_dict(d)
-                titulo = _extraer_titulo_dict(d)
-                catalog_id = _extraer_catalog_id_dict(d)
-                user_product_id = _extraer_user_product_id_dict(d)
-                imagen = _extraer_imagen_dict(d)
-
-                # Necesitamos al menos precio y algún dato que permita asociar
-                # el item con una tarjeta concreta.
-                if precio_num is None:
-                    continue
-                if not (catalog_id or user_product_id or titulo):
-                    continue
-
-                vistos.add(item_id)
-                resultados.append({
-                    "item_id": item_id,
-                    "catalog_product_id": catalog_id,
-                    "user_product_id": user_product_id,
-                    "precio": _formatear_precio(precio_num),
-                    "precio_num": precio_num,
-                    "titulo": titulo,
-                    "imagen_url": imagen,
-                })
-
-    print("Resultados embebidos con item_id + precio:", len(resultados))
-    return resultados
-
-
-def _catalog_id_desde_url(url):
-    m = re.search(r"/p/(MLA\d+)", url or "", re.IGNORECASE)
-    return m.group(1).upper() if m else ""
-
-
-def _user_product_id_desde_url(url):
-    m = re.search(r"/up/(MLAU\d+)", url or "", re.IGNORECASE)
-    return m.group(1).upper() if m else ""
-
-
-def _titulo_normalizado_para_match(texto):
-    texto = limpiar_texto(texto).lower()
-    texto = re.sub(r"[^a-z0-9áéíóúüñ ]+", " ", texto)
-    return re.sub(r"\s+", " ", texto).strip()
-
-
-def _buscar_resultado_para_tarjeta(datos_tarjeta, resultados_embebidos):
-    url = datos_tarjeta.get("url_original", "")
-    catalog_id = _catalog_id_desde_url(url)
-    user_product_id = _user_product_id_desde_url(url)
-
-    if catalog_id:
-        candidatos = [
-            r for r in resultados_embebidos
-            if r.get("catalog_product_id") == catalog_id
-        ]
-        if candidatos:
-            return candidatos[0]
-
-    if user_product_id:
-        candidatos = [
-            r for r in resultados_embebidos
-            if r.get("user_product_id") == user_product_id
-        ]
-        if candidatos:
-            return candidatos[0]
-
-    # Último respaldo: título casi idéntico.
-    titulo = _titulo_normalizado_para_match(datos_tarjeta.get("nombre", ""))
-    if titulo:
-        for r in resultados_embebidos:
-            rt = _titulo_normalizado_para_match(r.get("titulo", ""))
-            if rt and (rt == titulo or rt in titulo or titulo in rt):
-                return r
-
-    return None
-
-
-
-
-def _extraer_item_id_del_contenedor(contenedor, url=""):
-    """
-    Respaldo muy conservador: busca un item_id explícito dentro del HTML de
-    LA MISMA tarjeta. No confunde el MLA del catálogo /p/MLA... con el item,
-    porque solo acepta IDs asociados a item_id, wid o data-item-id.
-    """
-    partes = [url or ""]
-    try:
-        partes.append(str(contenedor))
-    except Exception:
-        pass
-
-    texto = requests.utils.unquote(" ".join(partes)).replace("&quot;", '"')
-
-    patrones = [
-        r"pdp_filters[^\s\"'<>]*item[_-]?id[:=](MLA\d{7,})",
-        r"(?:^|[?&#])wid=(MLA\d{7,})",
-        r"[\"']item[_-]?id[\"']\s*[:=]\s*[\"'](MLA\d{7,})[\"']",
-        r"data-item-id=[\"'](MLA\d{7,})[\"']",
-        r"data-id=[\"'](MLA\d{9,})[\"']",
-    ]
-
-    for patron in patrones:
-        m = re.search(patron, texto, re.IGNORECASE)
-        if m:
-            return m.group(1).upper()
-
-    return ""
-
-def _url_exacta_con_item(url_base, item_id):
-    """
-    Conserva la página de producto (/p o /up), pero fija la publicación
-    exacta mediante pdp_filters=item_id y wid. Mercado Libre usa esta forma
-    en los links compartidos para identificar una oferta concreta.
-    """
-    partes = urlsplit(url_base)
-    query = dict(parse_qsl(partes.query, keep_blank_values=True))
-    query["pdp_filters"] = f"item_id:{item_id}"
-    query["wid"] = item_id
-    nueva_query = urlencode(query, doseq=True)
-    return urlunsplit((partes.scheme, partes.netloc, partes.path, nueva_query, ""))
-
 
 def cargar_historial_publicados():
     if not HISTORIAL_PATH.exists():
@@ -1681,112 +449,16 @@ def guardar_historial_publicados(productos):
     print("✅ historial_publicados.txt actualizado:", len(ids), "IDs")
 
 
-def _es_url_mas_vendidos_general(url):
-    """Acepta solo la sección general de Más vendidos, sin categorías."""
-    try:
-        partes = urlsplit(url)
-        path = partes.path.rstrip("/").lower()
-        return (
-            "mercadolibre.com.ar" in partes.netloc.lower()
-            and path == "/mas-vendidos"
-        )
-    except Exception:
-        return False
+# =========================================================
+# BÚSQUEDA OFICIAL VÍA API DE MERCADO LIBRE
+# =========================================================
 
-
-def _urls_mas_vendidos_misma_seccion(soup, base_url):
-    """
-    Busca enlaces de continuación/paginación de la MISMA sección general
-    de Más vendidos. Nunca entra en /mas-vendidos/MLA... (categorías).
-    """
-    urls = []
-    vistos = set()
-
-    for enlace in soup.find_all("a", href=True):
-        href = limpiar_url(enlace.get("href"))
-        if not href:
-            continue
-        absoluta = urljoin(base_url, href)
-        if not _es_url_mas_vendidos_general(absoluta):
-            continue
-
-        partes = urlsplit(absoluta)
-        limpia = urlunsplit((partes.scheme or "https", partes.netloc, partes.path, partes.query, ""))
-        if limpia != base_url and limpia not in vistos:
-            vistos.add(limpia)
-            urls.append(limpia)
-
-    return urls
-
-
-def _extraer_productos_de_mas_vendidos(url_pagina):
-    """Extrae publicaciones exactas de la sección general de Más vendidos."""
-    response = safe_get(url_pagina, timeout=30)
-    print("HTTP Más vendidos:", response.status_code, "|", url_pagina)
-    soup = BeautifulSoup(response.text, "html.parser")
-    resultados_embebidos = extraer_resultados_embebidos(soup)
-    print("Resultados embebidos con item_id + precio:", len(resultados_embebidos))
-
-    encontrados = {}
-    for enlace in soup.find_all("a", href=True):
-        url = limpiar_url(enlace.get("href"))
-        if not es_producto(url) or "mas-vendidos" in url:
-            continue
-
-        contenedor = encontrar_contenedor(enlace)
-        if not contenedor:
-            continue
-
-        tarjeta = extraer_datos_tarjeta(enlace, contenedor)
-        exacto = _buscar_resultado_para_tarjeta(tarjeta, resultados_embebidos)
-
-        if exacto:
-            item_id = exacto.get("item_id", "")
-            precio = exacto.get("precio", "")
-            if exacto.get("imagen_url"):
-                tarjeta["imagen_url"] = exacto["imagen_url"]
-            if exacto.get("titulo"):
-                tarjeta["nombre"] = exacto["titulo"]
-        else:
-            item_id = _extraer_item_id_del_contenedor(contenedor, url)
-            precio = tarjeta.get("precio", "")
-
-        item_id = limpiar_texto(item_id).upper()
-        if not re.fullmatch(r"MLA\d{7,}", item_id):
-            continue
-        if not precio or precio == "Precio no disponible":
-            continue
-        if not tarjeta.get("imagen_url"):
-            continue
-
-        tarjeta["item_id"] = item_id
-        tarjeta["precio"] = precio
-        tarjeta["url_original"] = _url_exacta_con_item(url, item_id)
-        encontrados.setdefault(item_id, tarjeta)
-
-    return encontrados, _urls_mas_vendidos_misma_seccion(soup, url_pagina)
-
-
-def _urls_fuentes_ampliadas():
-    """
-    Mantiene las fuentes originales de v6 y amplía SOLO la variedad de
-    búsquedas de primera página.
-
-    Motivo: hoy muchas páginas/categorías de ML no están exponiendo item_id
-    utilizable al runner. En vez de paginar una fuente que devuelve 0,
-    consultamos más búsquedas independientes, donde sí pueden aparecer tarjetas
-    con item_id + precio + imagen.
-
-    No cambia historial, extractor, precio, imagen, link ni generación.
-    """
+def _consultas_ampliadas():
     consultas = [
-        # originales v6
         "tecnologia", "celulares", "hogar", "cocina", "herramientas",
         "electrodomesticos", "computacion", "audio", "deportes", "calzado",
         "indumentaria", "belleza", "juguetes", "bebes", "mascotas",
         "accesorios auto", "motos", "jardin", "oficina", "iluminacion",
-
-        # búsquedas adicionales concretas para conseguir IDs nuevos
         "smart tv", "televisores", "notebook", "tablet", "monitores",
         "auriculares", "parlantes", "impresoras", "teclados", "mouse",
         "aires acondicionados", "ventiladores", "calefaccion", "heladeras",
@@ -1799,241 +471,117 @@ def _urls_fuentes_ampliadas():
         "luces led", "baterias auto", "neumaticos", "repuestos auto",
         "accesorios celular", "cargadores", "power bank", "discos ssd",
         "memorias ram", "placas de video", "procesadores", "consolas",
-        "gaming", "ofertas hogar", "ofertas tecnologia", "ofertas herramientas",
-        # Reserva amplia: se consulta sólo si las fuentes anteriores no alcanzan.
-        "smart tv", "televisores", "notebooks", "tablets", "auriculares bluetooth",
-        "parlantes bluetooth", "smartwatch", "impresoras", "monitores", "routers wifi",
-        "microondas", "hornos electricos", "freidoras de aire", "cafeteras", "licuadoras",
-        "batidoras", "tostadoras", "pavas electricas", "ventiladores", "calefactores",
-        "aires acondicionados", "heladeras", "freezers", "lavarropas", "secarropas",
-        "aspiradoras", "planchas", "colchones", "almohadas", "sabanas", "toallas",
-        "ollas", "sartenes", "vajilla", "organizadores", "muebles", "sillas",
-        "escritorios", "bibliotecas", "herramientas electricas", "taladros", "amoladoras",
-        "atornilladores", "hidrolavadoras", "compresores", "soldadoras", "cajas herramientas",
-        "jardineria", "cortadoras de cesped", "bicicletas", "cascos bicicleta",
-        "zapatillas", "calzado", "camperas", "remeras", "pantalones", "ropa deportiva",
-        "valijas", "bolsos", "mochilas escolares", "juguetes", "juegos de mesa",
-        "bebes", "cochecitos bebe", "sillas bebe", "mascotas", "alimento mascotas",
-        "camas mascotas", "perfumes hombre", "perfumes mujer", "shampoo", "secadores pelo",
-        "planchitas pelo", "afeitadoras", "cepillos electricos", "camaras wifi",
-        "alarmas", "cerraduras digitales", "lamparas led", "tiras led", "baterias",
-        "cubiertas auto", "aceite motor", "accesorios auto", "soportes celular",
-        "cables usb", "cargadores celular", "fundas celular", "teclados", "mouse",
+        "gaming", "auriculares bluetooth", "parlantes bluetooth", "smartwatch",
+        "routers wifi", "hornos electricos", "freidoras de aire", "tostadoras",
+        "pavas electricas", "calefactores", "secarropas", "planchas",
+        "almohadas", "sabanas", "toallas", "ollas", "sartenes", "vajilla",
+        "organizadores", "escritorios", "bibliotecas", "atornilladores",
+        "cajas herramientas", "cortadoras de cesped", "cascos bicicleta",
+        "camperas", "remeras", "pantalones", "ropa deportiva", "valijas",
+        "bolsos", "mochilas escolares", "juegos de mesa", "cochecitos bebe",
+        "sillas bebe", "alimento mascotas", "cama mascotas", "perfumes hombre",
+        "perfumes mujer", "secadores pelo", "planchitas pelo", "afeitadoras",
+        "cepillos electricos", "camaras wifi", "alarmas", "cerraduras digitales",
+        "lamparas led", "tiras led", "cubiertas auto", "aceite motor",
+        "soportes celular", "cables usb", "cargadores celular", "fundas celular",
         "webcam", "discos externos", "pendrives", "micro sd", "fuentes pc",
-        "gabinetes pc", "joystick", "consolas videojuegos", "ofertas supermercado",
-        "limpieza hogar", "papeleria", "utiles escolares",
-
+        "gabinetes pc", "joystick", "consolas videojuegos", "limpieza hogar",
+        "papeleria", "utiles escolares",
     ]
-
-    urls = [URL_MAS_VENDIDOS, URL_OFERTAS]
-    vistos = set(urls)
-
-    for consulta in consultas:
-        url = _url_busqueda_ml(consulta)
-        if url not in vistos:
-            vistos.add(url)
-            urls.append(url)
-
-    print("Fuentes de búsqueda disponibles:", len(urls))
-    return urls
+    random.shuffle(consultas)
+    return consultas
 
 
-def _urls_paginacion_generica(soup, url_actual, max_urls=8):
-    """
-    Descubre PAGINAS REALES de la misma búsqueda leyendo los enlaces de
-    paginación que Mercado Libre incluyó en el HTML. No inventa URLs.
-
-    Acepta tanto la paginación clásica (_Desde_49...) como variantes con
-    parámetros (?page=2, offset=..., etc.) siempre que el enlace esté dentro
-    del bloque de paginación o esté marcado como "Siguiente".
-    """
-    if not soup or not url_actual:
-        return []
-
-    base = urlsplit(url_actual)
-    host_base = base.netloc.lower()
-    path_actual = base.path.rstrip("/") or "/"
-    # Si ya estamos en una página _Desde_N, recupera la raíz de la búsqueda.
-    path_raiz = re.sub(r"_Desde_\d+.*$", "", path_actual, flags=re.IGNORECASE)
-
-    candidatos = []
-    vistos = set()
-
-    for enlace in soup.find_all("a", href=True):
-        href = limpiar_texto(enlace.get("href", ""))
-        if not href:
-            continue
-
-        clases = " ".join(enlace.get("class", []))
-        titulo = limpiar_texto(enlace.get("title", ""))
-        aria = limpiar_texto(enlace.get("aria-label", ""))
-        texto = limpiar_texto(enlace.get_text(" ", strip=True))
-
-        padre = enlace.parent if isinstance(enlace.parent, Tag) else None
-        clases_padre = " ".join(padre.get("class", [])) if padre else ""
-        abuelo = padre.parent if padre and isinstance(padre.parent, Tag) else None
-        clases_abuelo = " ".join(abuelo.get("class", [])) if abuelo else ""
-
-        marca = " ".join([
-            clases, clases_padre, clases_abuelo, titulo, aria, texto, href
-        ]).lower()
-
-        es_paginacion = (
-            "pagination" in marca
-            or "paginación" in marca
-            or "paginacion" in marca
-            or "siguiente" in marca
-            or "_desde_" in href.lower()
-            or re.search(r"(?:[?&])(page|offset|from|start)=\d+", href, re.IGNORECASE)
-        )
-        if not es_paginacion:
-            continue
-
-        # Nunca volvemos hacia atrás si el enlace lo indica explícitamente.
-        if "anterior" in marca or "previous" in marca:
-            continue
-
-        absoluta = limpiar_url(urljoin(url_actual, href))
-        if not absoluta or absoluta == limpiar_url(url_actual):
-            continue
-
-        partes = urlsplit(absoluta)
-        host = partes.netloc.lower()
-        if host != host_base:
-            continue
-
-        path = partes.path.rstrip("/") or "/"
-        # Debe seguir perteneciendo a la misma búsqueda/sección.
-        if path_raiz != "/":
-            misma_raiz = (
-                path == path_raiz
-                or path.startswith(path_raiz + "_")
-                or path.startswith(path_raiz + "/")
-            )
-            if not misma_raiz:
-                continue
-
-        limpia = urlunsplit((partes.scheme or base.scheme or "https", host, partes.path, partes.query, ""))
-        if limpia in vistos:
-            continue
-        vistos.add(limpia)
-        candidatos.append(limpia)
-
-    def clave_pagina(url):
-        u = requests.utils.unquote(url)
-        m = re.search(r"_Desde_(\d+)", u, re.IGNORECASE)
-        if m:
-            return int(m.group(1))
-        q = dict(parse_qsl(urlsplit(u).query, keep_blank_values=True))
-        for k in ("page", "offset", "from", "start"):
-            try:
-                if k in q:
-                    return int(q[k])
-            except Exception:
-                pass
-        return 10**9
-
-    candidatos.sort(key=clave_pagina)
-    return candidatos[:max_urls]
-
-
-def _extraer_productos_pagina_generica(url_pagina, limite=80):
-    """Extrae publicaciones válidas y devuelve también su paginación real."""
-    response = safe_get(url_pagina, timeout=30)
-    print("HTTP fuente:", response.status_code, "|", url_pagina)
-    soup = BeautifulSoup(response.text, "html.parser")
-    resultados_embebidos = extraer_resultados_embebidos(soup)
-    encontrados = {}
-
-    for enlace in soup.find_all("a", href=True):
-        url = limpiar_url(enlace.get("href"))
-        if not es_producto(url):
-            continue
-
-        contenedor = encontrar_contenedor(enlace)
-        if not contenedor:
-            continue
-
-        tarjeta = extraer_datos_tarjeta(enlace, contenedor)
-        exacto = _buscar_resultado_para_tarjeta(tarjeta, resultados_embebidos)
-
-        if exacto:
-            item_id = limpiar_texto(exacto.get("item_id", "")).upper()
-            precio = exacto.get("precio", "")
-            if exacto.get("imagen_url"):
-                tarjeta["imagen_url"] = exacto["imagen_url"]
-            if exacto.get("titulo"):
-                tarjeta["nombre"] = exacto["titulo"]
-        else:
-            item_id = _extraer_item_id_del_contenedor(contenedor, url)
-            # En resultados de búsqueda, una URL /MLA-123... ya identifica
-            # una publicación exacta. Es seguro tomar el ID directamente.
-            if not item_id:
-                m_item = re.search(r"/MLA-?(\d{7,})", url, re.IGNORECASE)
-                if m_item:
-                    item_id = "MLA" + m_item.group(1)
-            precio = tarjeta.get("precio", "")
-
-        if not re.fullmatch(r"MLA\d{7,}", item_id):
-            continue
-        if not precio or precio == "Precio no disponible":
-            continue
-        if not tarjeta.get("imagen_url"):
-            continue
-
-        tarjeta["item_id"] = item_id
-        tarjeta["precio"] = precio
-        tarjeta["url_original"] = _url_exacta_con_item(url, item_id)
-        encontrados.setdefault(item_id, tarjeta)
-        if len(encontrados) >= limite:
-            break
-
-    paginas = _urls_paginacion_generica(soup, url_pagina)
-    if paginas:
-        print("Páginas reales descubiertas:", len(paginas), "|", url_pagina)
-    return encontrados, paginas
-
-
-
-def convertir_a_publicacion_exacta(producto):
-    """
-    Conserva la URL REAL que Mercado Libre publicó en la tarjeta y que ya fue
-    fijada al item_id por _url_exacta_con_item().
-
-    IMPORTANTE:
-    - NO fabrica una URL articulo.mercadolibre.com.ar a partir del item_id.
-    - Los productos de catálogo /p/MLA... deben conservar su URL de catálogo,
-      porque el Generador de Links de Afiliados acepta esa URL real.
-    - Solo valida que haya item_id y URL, y vuelve a fijar item_id/wid para
-      mantener asociada la oferta exacta.
-    """
-    item_id = limpiar_texto(producto.get("item_id", "")).upper()
+def _construir_producto_desde_api(raw_item, item_detalle=None):
+    item_id = limpiar_texto(raw_item.get("id", "")).upper()
     if not re.fullmatch(r"MLA\d{7,}", item_id):
-        raise RuntimeError("No se puede conservar publicación exacta: item_id inválido")
+        return None
 
-    url_actual = limpiar_url(producto.get("url_original", ""))
-    if not url_actual:
-        raise RuntimeError("No se puede conservar publicación exacta: URL ausente")
+    fuente_datos = item_detalle if isinstance(item_detalle, dict) and item_detalle.get("id") else raw_item
 
-    # La URL ya viene de la tarjeta real de Mercado Libre.
-    # Para catálogo /p/MLA... conserva ese path y fija la publicación exacta.
-    # Para una publicación clásica /MLA-... también conserva el path real.
-    enlace_exacto = _url_exacta_con_item(url_actual, item_id)
+    status = fuente_datos.get("status", "active")
+    if status != "active":
+        return None
 
-    producto["url_original"] = enlace_exacto
-    producto["precio_verificado"] = True
-    producto["precio_fuente"] = "mismo_resultado_item_exacto"
+    nombre = limpiar_texto(fuente_datos.get("title") or raw_item.get("title") or "")
+    precio_num = fuente_datos.get("price") or raw_item.get("price")
+    precio = _formatear_precio(precio_num)
+    if not nombre or not precio:
+        return None
 
-    print(
-        "ITEM EXACTO:",
-        item_id,
-        "| precio=", producto.get("precio", ""),
-        "| link=", enlace_exacto,
-    )
-    return producto
+    permalink = limpiar_url(fuente_datos.get("permalink") or raw_item.get("permalink") or "")
+    if not permalink:
+        return None
+
+    imagen_url = _mejor_imagen_api(fuente_datos, raw_item.get("thumbnail", ""))
+    if not imagen_url:
+        return None
+
+    precio_orig = fuente_datos.get("original_price") or raw_item.get("original_price")
+    precio_anterior = _formatear_precio(precio_orig) if precio_orig else ""
+    descuento = ""
+    if precio_orig and precio_num and float(precio_orig) > float(precio_num):
+        pct = round((1 - (float(precio_num) / float(precio_orig))) * 100)
+        if pct >= 5:
+            descuento = f"{pct}% OFF"
+
+    cuotas = ""
+    installments = raw_item.get("installments") or {}
+    if isinstance(installments, dict) and installments.get("quantity") and installments.get("amount"):
+        cant = installments["quantity"]
+        monto = _formatear_precio(installments["amount"])
+        rate = installments.get("rate", 0)
+        if rate == 0:
+            cuotas = f"{cant} cuotas sin interés de {monto}"
+        else:
+            cuotas = f"{cant} cuotas de {monto}"
+
+    vendidos_num = fuente_datos.get("sold_quantity") or raw_item.get("sold_quantity") or 0
+    vendidos = f"+{vendidos_num} vendidos" if vendidos_num else ""
+
+    atributos = _extraer_atributos_item_api(fuente_datos, nombre)
+
+    return {
+        "item_id": item_id,
+        "nombre": nombre,
+        "precio": precio,
+        "precio_anterior": precio_anterior,
+        "descuento": descuento,
+        "cuotas": cuotas,
+        "ranking": "",
+        "rating": "",
+        "vendidos": vendidos,
+        "url_original": permalink,
+        "imagen_url": imagen_url,
+        "atributos_visuales": atributos,
+        "precio_verificado": True,
+        "precio_fuente": "api_oficial_mercadolibre",
+    }
+
+
+def _buscar_items_api(consulta, offset=0, limit=30, solo_ofertas=False):
+    params = {
+        "q": consulta,
+        "offset": offset,
+        "limit": limit,
+        "condition": "new",
+    }
+    if solo_ofertas:
+        params["discount"] = "5-100"
+
+    data = api_get("/sites/MLA/search", params=params, timeout=30)
+    return data.get("results") or []
+
+
+def _obtener_detalle_item_api(item_id):
+    try:
+        return api_get(f"/items/{item_id}", timeout=25)
+    except Exception as e:
+        print(f"AVISO detalle item {item_id}:", e)
+        return None
+
 
 def _categoria_para_diversidad(producto):
-    """Clasifica solo para VARIAR la tanda. No altera producto, precio, link ni imagen."""
     texto = " ".join([
         limpiar_texto(producto.get("nombre", "")),
         limpiar_texto(producto.get("url_original", "")),
@@ -2097,13 +645,31 @@ def _categoria_para_diversidad(producto):
     return "otros"
 
 
+def _puntaje_producto_demanda(producto):
+    puntos = 0.0
+    vendidos = limpiar_texto(producto.get("vendidos", "")).lower()
+    m = re.search(r"([\d\.]+)", vendidos)
+    if m:
+        try:
+            n = float(m.group(1).replace(".", ""))
+            puntos += min(n / 100.0, 500.0)
+        except Exception:
+            pass
+
+    m = re.search(r"(\d{1,2})%", producto.get("descuento", ""))
+    if m:
+        puntos += int(m.group(1)) * 2
+
+    if producto.get("cuotas"):
+        puntos += 20
+    if producto.get("precio") and producto.get("precio") != "Precio no disponible":
+        puntos += 10
+    if producto.get("imagen_url"):
+        puntos += 10
+    return puntos
+
+
 def _seleccionar_tanda_diversa(candidatos, cantidad):
-    """
-    Prefiere variedad, pero NUNCA hace fallar la tanda por falta de categorías.
-    1ª pasada: máximo 1 por categoría.
-    2ª pasada: máximo 2 por categoría.
-    3ª pasada: completa con los mejores restantes, sin límite.
-    """
     ordenados = sorted(candidatos, key=_puntaje_producto_demanda, reverse=True)
     elegidos = []
     ids_elegidos = set()
@@ -2119,7 +685,6 @@ def _seleccionar_tanda_diversa(candidatos, cantidad):
         conteo[categoria] = conteo.get(categoria, 0) + 1
         return True
 
-    # 1) La mayor variedad posible.
     categorias_usadas = set()
     for producto in ordenados:
         if len(elegidos) >= cantidad:
@@ -2130,7 +695,6 @@ def _seleccionar_tanda_diversa(candidatos, cantidad):
         if agregar(producto):
             categorias_usadas.add(categoria)
 
-    # 2) Si faltan lugares, permite hasta 2 de cada categoría.
     for producto in ordenados:
         if len(elegidos) >= cantidad:
             break
@@ -2139,162 +703,74 @@ def _seleccionar_tanda_diversa(candidatos, cantidad):
             continue
         agregar(producto)
 
-    # 3) Respaldo: completa sí o sí con productos válidos disponibles.
     for producto in ordenados:
         if len(elegidos) >= cantidad:
             break
         agregar(producto)
 
-    print("Categorías elegidas:", [
-        _categoria_para_diversidad(p) for p in elegidos
-    ])
+    print("Categorías elegidas:", [_categoria_para_diversidad(p) for p in elegidos])
     return elegidos[:cantidad]
 
 
 def obtener_productos_base():
-    """
-    TANDA NORMAL ESTABLE, DIVERSA Y CON BÚSQUEDA PROFUNDA.
+    print("--- BUSCANDO 10 PRODUCTOS NUEVOS VÍA API OFICIAL DE MERCADO LIBRE ---")
+    token = os.getenv("MELI_ACCESS_TOKEN", "").strip() or MELI_ACCESS_TOKEN
+    print("Token Mercado Libre presente:", "SÍ" if token else "NO")
 
-    Reglas que NO se negocian:
-    - historial intacto: jamás reutiliza un item ya publicado/generado;
-    - precio, link e imagen deben pertenecer al mismo registro válido;
-    - no se inventan URLs de producto ni URLs de paginación;
-    - si una fuente funciona, sigue sus páginas REALES antes de abandonarla;
-    - la variedad se aplica al final y nunca impide completar 10.
-    """
-    print("--- BUSCANDO 10 PRODUCTOS NUEVOS CON PAGINACIÓN REAL Y VARIEDAD ---")
     historial = cargar_historial_publicados()
     print("Publicaciones ya usadas en el historial:", len(historial))
 
     nuevos = {}
-    fuentes = _urls_fuentes_ampliadas()
+    consultas = _consultas_ampliadas()
+    OBJETIVO_POOL = max(CANTIDAD_PRODUCTOS * 2, 20)
 
-    # Reúne suficientes candidatos para poder variar la tanda. Si no llega a
-    # este pool pero sí alcanza 10, igualmente podrá publicar 10 válidos.
-    OBJETIVO_POOL = max(CANTIDAD_PRODUCTOS * 3, CANTIDAD_PRODUCTOS)
-    MAX_URLS_PROCESADAS = 180
-    MAX_PAGINAS_POR_FUENTE = 8
-
-    # cola: (url_a_visitar, fuente_raiz, profundidad)
-    cola = deque((url, url, 0) for url in fuentes)
-    visitadas = set()
-    paginas_por_fuente = {}
-    urls_procesadas = 0
-
-    while cola and urls_procesadas < MAX_URLS_PROCESADAS:
+    for consulta in consultas:
         if len(nuevos) >= OBJETIVO_POOL:
             break
 
-        url_pagina, fuente_raiz, profundidad = cola.popleft()
-        url_pagina = limpiar_url(url_pagina)
-        if not url_pagina or url_pagina in visitadas:
-            continue
-
-        visitadas.add(url_pagina)
-        urls_procesadas += 1
-
-        try:
-            if _es_url_mas_vendidos_general(url_pagina):
-                encontrados, paginas = _extraer_productos_de_mas_vendidos(url_pagina)
-            else:
-                encontrados, paginas = _extraer_productos_pagina_generica(url_pagina)
-        except Exception as e:
-            print("AVISO fuente:", url_pagina, "|", e)
-            continue
-
-        cantidad_fuente = len(encontrados)
-        agregados_esta_pagina = 0
-
-        for item_id, producto in encontrados.items():
-            item_id = limpiar_texto(item_id).upper()
-
-            if item_id in historial or item_id in nuevos:
-                continue
-            if not re.fullmatch(r"MLA\d{7,}", item_id):
-                continue
-            if not es_producto_permitido(producto):
-                print("DESCARTADO por filtro (alcohol):", producto.get("nombre", ""))
-                continue
-
-            nombre = limpiar_texto(producto.get("nombre", ""))
-            enlace = limpiar_texto(producto.get("url_original", ""))
-            imagen = limpiar_texto(producto.get("imagen_url", ""))
-            precio = limpiar_texto(producto.get("precio", ""))
-
-            if not nombre or not enlace or not imagen:
-                continue
-            if not precio or precio == "Precio no disponible":
-                continue
-
-            item_url = extraer_item_id_url(enlace)
-            if item_url and item_url != item_id:
-                print("DESCARTADO: item/link no coinciden:", item_id, "|", item_url)
-                continue
-
-            contexto = " ".join(
-                limpiar_texto(producto.get(k, ""))
-                for k in (
-                    "texto_tarjeta", "texto_contexto", "contexto_precio",
-                    "leyenda_precio", "price_context", "price_label"
-                )
-            ).lower()
-
-            if any(frase in contexto for frase in (
-                "más opciones desde", "mas opciones desde", "productos nuevos desde",
-                "opciones desde", "precio desde",
-            )):
-                print("DESCARTADO: precio 'desde' de catálogo:", item_id, "|", nombre)
-                continue
-
-            producto["item_id"] = item_id
-            producto["nombre"] = nombre
-            producto["url_original"] = enlace
-            producto["imagen_url"] = imagen
-            producto["precio"] = precio
-            producto["precio_verificado"] = True
-            producto["precio_fuente"] = "mismo_resultado_listado"
-            producto["atributos_visuales"] = atributos_desde_titulo(nombre)
-
-            nuevos[item_id] = producto
-            agregados_esta_pagina += 1
-            print(
-                f"CANDIDATO VÁLIDO {len(nuevos)}:",
-                item_id, "|", _categoria_para_diversidad(producto), "|",
-                nombre, "| precio=", precio
-            )
-
+        for solo_ofertas in (True, False):
             if len(nuevos) >= OBJETIVO_POOL:
                 break
 
-        print(
-            "Candidatos válidos acumulados:", len(nuevos),
-            "| encontrados en página:", cantidad_fuente,
-            "| nuevos agregados:", agregados_esta_pagina,
-        )
+            try:
+                resultados = _buscar_items_api(consulta, offset=0, limit=25, solo_ofertas=solo_ofertas)
+            except Exception as e:
+                print(f"AVISO API búsqueda '{consulta}' (ofertas={solo_ofertas}):", e)
+                continue
 
-        # CLAVE: si una fuente devuelve productos válidos (aunque todos estén
-        # en historial), profundizamos en sus páginas reales para encontrar
-        # productos nuevos antes de seguir recorriendo cientos de búsquedas.
-        if cantidad_fuente > 0 and paginas and len(nuevos) < OBJETIVO_POOL:
-            usados = paginas_por_fuente.get(fuente_raiz, 0)
-            cupo = max(0, MAX_PAGINAS_POR_FUENTE - usados)
-            nuevas_paginas = [p for p in paginas if p not in visitadas][:cupo]
-            if nuevas_paginas:
-                paginas_por_fuente[fuente_raiz] = usados + len(nuevas_paginas)
-                # Prioriza inmediatamente las páginas de la fuente que sí dio
-                # resultados. reversed + appendleft conserva el orden natural.
-                for pagina in reversed(nuevas_paginas):
-                    cola.appendleft((pagina, fuente_raiz, profundidad + 1))
+            if not resultados:
+                continue
+
+            for raw in resultados:
+                if len(nuevos) >= OBJETIVO_POOL:
+                    break
+
+                item_id = limpiar_texto(raw.get("id", "")).upper()
+                if not item_id or item_id in historial or item_id in nuevos:
+                    continue
+                if not re.fullmatch(r"MLA\d{7,}", item_id):
+                    continue
+
+                detalle = _obtener_detalle_item_api(item_id)
+                producto = _construir_producto_desde_api(raw, detalle)
+                if not producto:
+                    continue
+
+                if not es_producto_permitido(producto):
+                    print("DESCARTADO por filtro (alcohol):", producto.get("nombre", ""))
+                    continue
+
+                nuevos[item_id] = producto
                 print(
-                    "Profundizando fuente productiva:", fuente_raiz,
-                    "| páginas añadidas:", len(nuevas_paginas)
+                    f"CANDIDATO VÁLIDO {len(nuevos)}:",
+                    item_id, "|", _categoria_para_diversidad(producto), "|",
+                    producto["nombre"], "| precio=", producto["precio"]
                 )
 
     if len(nuevos) < CANTIDAD_PRODUCTOS:
         raise RuntimeError(
-            f"Solo se consiguieron {len(nuevos)} productos nuevos completos tras "
-            f"revisar {urls_procesadas} páginas reales. Se necesitan "
-            f"{CANTIDAD_PRODUCTOS}. El historial NO fue borrado ni se usaron repetidos."
+            f"Solo se consiguieron {len(nuevos)} productos nuevos completos vía API. "
+            f"Se necesitan {CANTIDAD_PRODUCTOS}. El historial NO fue borrado ni se usaron repetidos."
         )
 
     candidatos = list(nuevos.values())
@@ -2302,15 +778,13 @@ def obtener_productos_base():
 
     if len(elegidos) != CANTIDAD_PRODUCTOS:
         raise RuntimeError(
-            f"La selección diversa devolvió {len(elegidos)} productos y se necesitan "
-            f"{CANTIDAD_PRODUCTOS}."
+            f"La selección diversa devolvió {len(elegidos)} productos y se necesitan {CANTIDAD_PRODUCTOS}."
         )
 
     return elegidos
 
 
 def _leer_demanda_pendiente():
-    """Lee necesidades detectadas sin volver a procesar la misma línea."""
     if not DEMANDA_PATH.exists():
         return []
 
@@ -2337,100 +811,7 @@ def _leer_demanda_pendiente():
     return pendientes
 
 
-def _url_busqueda_ml(consulta):
-    """Construye la URL pública normal de resultados de Mercado Libre."""
-    slug = limpiar_texto(consulta).lower()
-    slug = re.sub(r"[^a-z0-9áéíóúüñ]+", "-", slug, flags=re.IGNORECASE)
-    slug = slug.strip("-")
-    return f"https://listado.mercadolibre.com.ar/{slug}" if slug else URL_OFERTAS
-
-
-def _puntaje_producto_demanda(producto):
-    """Ordena sin inventar datos: ventas, rating, descuento y cuotas visibles."""
-    puntos = 0.0
-    vendidos = limpiar_texto(producto.get("vendidos", "")).lower()
-    m = re.search(r"([\d\.]+)\s*(mil)?", vendidos)
-    if m:
-        try:
-            n = float(m.group(1).replace(".", ""))
-            if m.group(2):
-                n *= 1000
-            puntos += min(n / 100.0, 500.0)
-        except Exception:
-            pass
-
-    try:
-        puntos += float(producto.get("rating") or 0) * 15
-    except Exception:
-        pass
-
-    m = re.search(r"(\d{1,2})%", producto.get("descuento", ""))
-    if m:
-        puntos += int(m.group(1)) * 2
-
-    if producto.get("cuotas"):
-        puntos += 20
-    if producto.get("precio") and producto.get("precio") != "Precio no disponible":
-        puntos += 10
-    if producto.get("imagen_url"):
-        puntos += 10
-    return puntos
-
-
-def _extraer_busqueda_publica(consulta, limite=12):
-    """Busca exactamente lo pedido en la web pública de Mercado Libre."""
-    url_busqueda = _url_busqueda_ml(consulta)
-    print("🔎 DEMANDA: buscando en Mercado Libre:", consulta)
-    response = safe_get(url_busqueda, timeout=30)
-    soup = BeautifulSoup(response.text, "html.parser")
-    resultados_embebidos = extraer_resultados_embebidos(soup)
-
-    encontrados = {}
-    for enlace in soup.find_all("a", href=True):
-        url = limpiar_url(enlace.get("href"))
-        if not es_producto(url):
-            continue
-
-        contenedor = encontrar_contenedor(enlace)
-        if not contenedor:
-            continue
-
-        tarjeta = extraer_datos_tarjeta(enlace, contenedor)
-        exacto = _buscar_resultado_para_tarjeta(tarjeta, resultados_embebidos)
-        if exacto:
-            item_id = limpiar_texto(exacto.get("item_id", "")).upper()
-            precio = exacto.get("precio", "")
-            if exacto.get("imagen_url"):
-                tarjeta["imagen_url"] = exacto["imagen_url"]
-            if exacto.get("titulo"):
-                tarjeta["nombre"] = exacto["titulo"]
-        else:
-            item_id = _extraer_item_id_del_contenedor(contenedor, url)
-            precio = tarjeta.get("precio", "")
-
-        if not re.fullmatch(r"MLA\d{7,}", item_id):
-            continue
-        if not precio or precio == "Precio no disponible" or not tarjeta.get("imagen_url"):
-            continue
-
-        tarjeta["item_id"] = item_id
-        tarjeta["precio"] = precio
-        tarjeta["url_original"] = _url_exacta_con_item(url, item_id)
-        tarjeta["consulta_demanda"] = consulta
-        if not es_producto_permitido(tarjeta):
-            print("DESCARTADO por filtro (alcohol):", tarjeta.get("nombre", ""))
-            continue
-        encontrados.setdefault(item_id, tarjeta)
-        if len(encontrados) >= limite:
-            break
-
-    productos = list(encontrados.values())
-    productos.sort(key=_puntaje_producto_demanda, reverse=True)
-    return productos
-
-
 def obtener_productos_demanda(maximo=10):
-    """Convierte necesidades ya detectadas en productos concretos para publicar."""
     pendientes = _leer_demanda_pendiente()
     if not pendientes:
         return [], []
@@ -2445,23 +826,28 @@ def obtener_productos_demanda(maximo=10):
         if len(elegidos) >= maximo:
             break
         try:
-            candidatos = _extraer_busqueda_publica(necesidad["consulta"])
+            resultados = _buscar_items_api(necesidad["consulta"], offset=0, limit=15, solo_ofertas=False)
         except Exception as e:
-            print("AVISO demanda:", necesidad["consulta"], "|", e)
+            print("AVISO demanda API:", necesidad["consulta"], "|", e)
             continue
 
-        # DEMANDA URGENTE: jamás reutiliza una publicación del historial.
-        candidatos = [
-            p for p in candidatos
-            if p.get("item_id") not in historial and p.get("item_id") not in ids
-        ]
+        candidatos = []
+        for raw in resultados:
+            item_id = limpiar_texto(raw.get("id", "")).upper()
+            if not item_id or item_id in historial or item_id in ids:
+                continue
+            detalle = _obtener_detalle_item_api(item_id)
+            prod = _construir_producto_desde_api(raw, detalle)
+            if prod and es_producto_permitido(prod):
+                prod["consulta_demanda"] = necesidad["consulta"]
+                prod["origen_demanda"] = necesidad.get("origen", "")
+                candidatos.append(prod)
+
         candidatos.sort(key=_puntaje_producto_demanda, reverse=True)
         candidato = candidatos[0] if candidatos else None
         if not candidato:
             continue
 
-        candidato["origen_demanda"] = necesidad.get("origen", "")
-        candidato = enriquecer_solo_textos_reales(candidato)
         elegidos.append(candidato)
         ids.add(candidato["item_id"])
         lineas_resueltas.append(necesidad["linea"])
@@ -2488,7 +874,6 @@ def _marcar_demanda_procesada(lineas):
 
 
 def obtener_productos():
-    """Compatibilidad: la tanda normal siempre contiene 10 productos nuevos."""
     return obtener_productos_base()
 
 
@@ -2498,7 +883,6 @@ def obtener_productos():
 
 def ajustar_texto(draw, texto, font, ancho_maximo):
     palabras = limpiar_texto(texto).split()
-
     if not palabras:
         return [""]
 
@@ -2522,7 +906,6 @@ def ajustar_texto(draw, texto, font, ancho_maximo):
 
 def lineas_limitadas(draw, texto, font, ancho_maximo, max_lineas):
     lineas = ajustar_texto(draw, texto, font, ancho_maximo)
-
     if len(lineas) <= max_lineas:
         return lineas
 
@@ -2541,7 +924,6 @@ def lineas_limitadas(draw, texto, font, ancho_maximo, max_lineas):
 
 
 def fuente_titulo(draw, texto):
-    # Tamaño y peso ajustados al diseño aprobado.
     for tamano in range(43, 30, -1):
         f = fuente(tamano, True)
         lineas = ajustar_texto(draw, texto, f, 920)
@@ -2563,7 +945,6 @@ def cargar_plantilla(path):
         )
 
     imagen = Image.open(path).convert("RGBA")
-
     if imagen.size != (ANCHO, ALTO):
         imagen = imagen.resize((ANCHO, ALTO), Image.LANCZOS)
 
@@ -2571,14 +952,8 @@ def cargar_plantilla(path):
 
 
 def dibujar_textos_laterales(draw, datos):
-    """
-    Usa únicamente los tres textos obtenidos de la publicación real.
-    Los íconos amarillos ya están incorporados en la plantilla.
-    """
     textos = list(datos.get("atributos_visuales", []))[:3]
 
-    # Si la web no expuso 3 especificaciones, completa solo con texto literal
-    # del título de la publicación, nunca con frases inventadas.
     if len(textos) < 3:
         for texto in atributos_desde_titulo(datos.get("nombre", "")):
             if texto.lower() not in [x.lower() for x in textos]:
@@ -2606,9 +981,6 @@ def dibujar_textos_laterales(draw, datos):
 
 
 def pegar_producto(imagen, producto):
-    """
-    Inserta el producto grande, centrado y sin el rectángulo blanco exterior.
-    """
     if producto is None:
         return
 
@@ -2616,7 +988,6 @@ def pegar_producto(imagen, producto):
     if producto is None or producto.width < 2 or producto.height < 2:
         return
 
-    # Zona central del diseño aprobado.
     area_x0 = 245
     area_y0 = 275
     area_x1 = 1010
@@ -2626,9 +997,6 @@ def pegar_producto(imagen, producto):
     max_h = area_y1 - area_y0
 
     escala = min(max_w / producto.width, max_h / producto.height)
-
-    # Le damos presencia similar a la zapatilla aprobada.
-    # Nunca achica innecesariamente una foto pequeña.
     nuevo_w = max(1, int(producto.width * escala))
     nuevo_h = max(1, int(producto.height * escala))
 
@@ -2660,7 +1028,6 @@ def dibujar_precio(draw, precio):
 
 
 def dibujar_slogan_mercado_libre(draw):
-    """Agrega el slogan visible en el modelo aprobado."""
     azul = (36, 49, 126)
     amarillo = (255, 225, 0)
 
@@ -2674,19 +1041,12 @@ def crear_imagen_oferta(datos, numero):
     nombre_archivo = f"oferta_final_{numero:02d}_{VERSION}.png"
     salida = CARPETA_OFERTAS / nombre_archivo
 
-    # La plantilla fija conserva exactamente colores, cabecera, tarjetas,
-    # barra negra, barra inferior, logos y adornos aprobados.
     imagen = cargar_plantilla(PLANTILLA_OFERTA_PATH)
     draw = ImageDraw.Draw(imagen)
 
     dibujar_slogan_mercado_libre(draw)
-
-    # 1) Textos laterales: de la publicación real.
     dibujar_textos_laterales(draw, datos)
 
-    # 2) Foto asociada al mismo producto.
-    # Si la descarga falla, NO se crea una imagen incompleta ni se permite
-    # continuar con una foto anterior/reutilizada.
     producto = descargar_imagen(datos["imagen_url"])
     if producto is None:
         raise RuntimeError(
@@ -2695,7 +1055,6 @@ def crear_imagen_oferta(datos, numero):
         )
     pegar_producto(imagen, producto)
 
-    # 3) Nombre real del producto.
     font_titulo, lineas = fuente_titulo(draw, datos["nombre"])
 
     y = 825
@@ -2706,7 +1065,6 @@ def crear_imagen_oferta(datos, numero):
         draw.text((x, y), linea, font=font_titulo, fill=(6, 6, 6))
         y += 45
 
-    # 4) Precio.
     dibujar_precio(draw, datos["precio"])
 
     imagen.convert("RGB").save(salida, "PNG", optimize=True)
@@ -2743,17 +1101,6 @@ def limpiar_ofertas():
 
 
 def validar_tanda_integridad(productos):
-    """
-    Control previo a generar los archivos que consume Automate.
-
-    Evita publicar una tanda si:
-    - no tiene exactamente 10 productos;
-    - falta item/link/precio/imagen;
-    - el precio no fue verificado en la publicación exacta;
-    - se repite un item, un link o una URL de imagen dentro de la tanda.
-
-    Así un fallo no se transforma silenciosamente en una publicación incorrecta.
-    """
     if len(productos) != CANTIDAD_PRODUCTOS:
         raise RuntimeError(
             f"Tanda inválida: se esperaban {CANTIDAD_PRODUCTOS} productos "
@@ -2762,7 +1109,6 @@ def validar_tanda_integridad(productos):
 
     ids = set()
     links = set()
-    imagenes = set()
 
     for numero, datos in enumerate(productos, start=1):
         item_id = limpiar_texto(datos.get("item_id", "")).upper()
@@ -2785,15 +1131,9 @@ def validar_tanda_integridad(productos):
             raise RuntimeError(f"Producto {numero}: item repetido {item_id}.")
         if link in links:
             raise RuntimeError(f"Producto {numero}: link repetido.")
-        if imagen in imagenes:
-            print(
-                f"AVISO: producto {numero} comparte URL de imagen con otro producto; "
-                "se conserva la asociación del registro y se revisará por separado."
-            )
 
         ids.add(item_id)
         links.add(link)
-        imagenes.add(imagen)
 
     print("✅ Integridad de tanda verificada: 10 productos, links, precios e imágenes.")
 
@@ -2826,7 +1166,6 @@ def guardar_tanda(productos):
     print("✅ datos_tanda.txt generado")
     print("✅ imagenes_tanda.txt generado")
 
-    # Queda aparte para no cambiar el circuito actual de Automate.
     crear_imagen_promo_canal()
 
 
@@ -2835,11 +1174,6 @@ def guardar_tanda(productos):
 # =========================================================
 
 def guardar_urgentes(productos):
-    """
-    Genera archivos separados para demanda detectada. No pisa la tanda normal.
-    El detector puede disparar este workflow en cuanto agregue demanda_detectada.txt;
-    Automate podrá vigilar estos archivos y publicar cada urgente inmediatamente.
-    """
     if not productos:
         return
 
@@ -2864,16 +1198,13 @@ def guardar_urgentes(productos):
 # =========================================================
 
 def main():
-    # 1) DEMANDA URGENTE: si existe, se prepara aparte y sin repetidos.
     urgentes, lineas_resueltas = obtener_productos_demanda(maximo=50)
     if urgentes:
         guardar_urgentes(urgentes)
         guardar_historial_publicados(urgentes)
         _marcar_demanda_procesada(lineas_resueltas)
 
-    # 2) TANDA NORMAL: siempre 10 NUEVOS; nunca completa con repetidos.
     productos = obtener_productos_base()
-    productos = [convertir_a_publicacion_exacta(p) for p in productos]
     if len(productos) != CANTIDAD_PRODUCTOS:
         raise RuntimeError(
             f"La tanda normal debe tener {CANTIDAD_PRODUCTOS} productos nuevos; "
