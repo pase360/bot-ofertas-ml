@@ -52,7 +52,6 @@ VERSION = os.getenv(
 
 RAW_BASE = f"https://raw.githubusercontent.com/{REPO}/{RAMA}/ofertas"
 
-# Tamaño exacto de las plantillas aprobadas
 ANCHO = 1122
 ALTO = 1402
 
@@ -107,28 +106,6 @@ def limpiar_url(url):
     url = urljoin("https://www.mercadolibre.com.ar", url)
     partes = urlsplit(url)
     return urlunsplit((partes.scheme, partes.netloc, partes.path, partes.query, ""))
-
-
-def extraer_item_id_url(url):
-    if not url:
-        return ""
-
-    decodificada = requests.utils.unquote(str(url)).upper()
-
-    m = re.search(r"ITEM[_-]?ID(?:=|:)[^&]*?(MLA-?\d{7,})", decodificada)
-    if m:
-        return m.group(1).replace("-", "")
-
-    m = re.search(r"(?:[?&]|^)WID=(MLA-?\d{7,})", decodificada)
-    if m:
-        return m.group(1).replace("-", "")
-
-    path = urlsplit(str(url)).path.upper()
-    m = re.search(r"/(MLA-?\d{7,})(?:-|/|$)", path)
-    if m:
-        return m.group(1).replace("-", "")
-
-    return ""
 
 
 def _formatear_precio(numero):
@@ -402,7 +379,7 @@ def _extraer_atributos_item_api(item_json, titulo):
     return resultado[:3]
 
 
-def _mejor_imagen_api(item_json, fallback_thumb=""):
+def _mejor_imagen_api(item_json):
     pictures = item_json.get("pictures") or []
     if pictures and isinstance(pictures, list):
         pic = pictures[0]
@@ -411,7 +388,7 @@ def _mejor_imagen_api(item_json, fallback_thumb=""):
             if url:
                 return url
 
-    thumb = item_json.get("thumbnail") or fallback_thumb or ""
+    thumb = item_json.get("thumbnail") or ""
     if thumb:
         thumb = re.sub(r"-I(\.[a-zA-Z0-9]+)$", r"-O\1", thumb)
         if thumb.startswith("http://"):
@@ -450,7 +427,7 @@ def guardar_historial_publicados(productos):
 
 
 # =========================================================
-# BÚSQUEDA OFICIAL VÍA API DE MERCADO LIBRE
+# MÉTODO HÍBRIDO: DESCUBRE IDs EN WEB PÚBLICA + LEE DETALLES EN API OFICIAL
 # =========================================================
 
 def _consultas_ampliadas():
@@ -492,32 +469,99 @@ def _consultas_ampliadas():
     return consultas
 
 
-def _construir_producto_desde_api(raw_item, item_detalle=None):
-    item_id = limpiar_texto(raw_item.get("id", "")).upper()
+def _url_busqueda_ml(consulta):
+    slug = limpiar_texto(consulta).lower()
+    slug = re.sub(r"[^a-z0-9áéíóúüñ]+", "-", slug, flags=re.IGNORECASE)
+    slug = slug.strip("-")
+    return f"https://listado.mercadolibre.com.ar/{slug}" if slug else URL_OFERTAS
+
+
+def _descubrir_item_ids_en_url(url):
+    """
+    Escanea el HTML crudo de la página pública de Mercado Libre buscando
+    cualquier referencia a publicaciones (MLA1234567890 o /MLA-1234567890)
+    sin depender de clases CSS ni estructura visual.
+    """
+    try:
+        resp = safe_get(url, timeout=25)
+        html = resp.text
+    except Exception as e:
+        print("AVISO web:", url, "|", e)
+        return []
+
+    encontrados = []
+    vistos = set()
+    # Busca MLA seguido de 8 a 12 dígitos (con o sin guión)
+    for m in re.finditer(r"\bMLA-?(\d{8,12})\b", html, re.IGNORECASE):
+        item_id = "MLA" + m.group(1)
+        if item_id not in vistos:
+            vistos.add(item_id)
+            encontrados.append(item_id)
+
+    return encontrados
+
+
+def _obtener_items_multiget_api(item_ids):
+    """
+    Consulta hasta 20 ítems en una sola llamada a /items?ids=... de la API oficial,
+    el cual no requiere permisos de búsqueda global.
+    """
+    if not item_ids:
+        return []
+
+    items_validos = []
+    # Procesar en lotes de 20 (límite de Mercado Libre multiget)
+    for i in range(0, len(item_ids), 20):
+        lote = item_ids[i:i + 20]
+        ids_str = ",".join(lote)
+        try:
+            data = api_get("/items", params={"ids": ids_str}, timeout=30)
+            if isinstance(data, list):
+                for entrada in data:
+                    if isinstance(entrada, dict) and entrada.get("code") == 200:
+                        body = entrada.get("body")
+                        if isinstance(body, dict) and body.get("id"):
+                            items_validos.append(body)
+        except Exception as e:
+            print("AVISO multiget /items:", e)
+            # Fallback individual si falla el lote
+            for single_id in lote:
+                try:
+                    body = api_get(f"/items/{single_id}", timeout=20)
+                    if isinstance(body, dict) and body.get("id"):
+                        items_validos.append(body)
+                except Exception:
+                    pass
+
+    return items_validos
+
+
+def _construir_producto_desde_item_api(item_json):
+    item_id = limpiar_texto(item_json.get("id", "")).upper()
     if not re.fullmatch(r"MLA\d{7,}", item_id):
         return None
 
-    fuente_datos = item_detalle if isinstance(item_detalle, dict) and item_detalle.get("id") else raw_item
-
-    status = fuente_datos.get("status", "active")
-    if status != "active":
+    if item_json.get("status") != "active":
         return None
 
-    nombre = limpiar_texto(fuente_datos.get("title") or raw_item.get("title") or "")
-    precio_num = fuente_datos.get("price") or raw_item.get("price")
+    if item_json.get("condition") != "new":
+        return None
+
+    nombre = limpiar_texto(item_json.get("title") or "")
+    precio_num = item_json.get("price")
     precio = _formatear_precio(precio_num)
     if not nombre or not precio:
         return None
 
-    permalink = limpiar_url(fuente_datos.get("permalink") or raw_item.get("permalink") or "")
+    permalink = limpiar_url(item_json.get("permalink") or "")
     if not permalink:
         return None
 
-    imagen_url = _mejor_imagen_api(fuente_datos, raw_item.get("thumbnail", ""))
+    imagen_url = _mejor_imagen_api(item_json)
     if not imagen_url:
         return None
 
-    precio_orig = fuente_datos.get("original_price") or raw_item.get("original_price")
+    precio_orig = item_json.get("original_price")
     precio_anterior = _formatear_precio(precio_orig) if precio_orig else ""
     descuento = ""
     if precio_orig and precio_num and float(precio_orig) > float(precio_num):
@@ -525,21 +569,10 @@ def _construir_producto_desde_api(raw_item, item_detalle=None):
         if pct >= 5:
             descuento = f"{pct}% OFF"
 
-    cuotas = ""
-    installments = raw_item.get("installments") or {}
-    if isinstance(installments, dict) and installments.get("quantity") and installments.get("amount"):
-        cant = installments["quantity"]
-        monto = _formatear_precio(installments["amount"])
-        rate = installments.get("rate", 0)
-        if rate == 0:
-            cuotas = f"{cant} cuotas sin interés de {monto}"
-        else:
-            cuotas = f"{cant} cuotas de {monto}"
-
-    vendidos_num = fuente_datos.get("sold_quantity") or raw_item.get("sold_quantity") or 0
+    vendidos_num = item_json.get("sold_quantity") or 0
     vendidos = f"+{vendidos_num} vendidos" if vendidos_num else ""
 
-    atributos = _extraer_atributos_item_api(fuente_datos, nombre)
+    atributos = _extraer_atributos_item_api(item_json, nombre)
 
     return {
         "item_id": item_id,
@@ -547,7 +580,7 @@ def _construir_producto_desde_api(raw_item, item_detalle=None):
         "precio": precio,
         "precio_anterior": precio_anterior,
         "descuento": descuento,
-        "cuotas": cuotas,
+        "cuotas": "",
         "ranking": "",
         "rating": "",
         "vendidos": vendidos,
@@ -555,30 +588,8 @@ def _construir_producto_desde_api(raw_item, item_detalle=None):
         "imagen_url": imagen_url,
         "atributos_visuales": atributos,
         "precio_verificado": True,
-        "precio_fuente": "api_oficial_mercadolibre",
+        "precio_fuente": "api_items_oficial",
     }
-
-
-def _buscar_items_api(consulta, offset=0, limit=30, solo_ofertas=False):
-    params = {
-        "q": consulta,
-        "offset": offset,
-        "limit": limit,
-        "condition": "new",
-    }
-    if solo_ofertas:
-        params["discount"] = "5-100"
-
-    data = api_get("/sites/MLA/search", params=params, timeout=30)
-    return data.get("results") or []
-
-
-def _obtener_detalle_item_api(item_id):
-    try:
-        return api_get(f"/items/{item_id}", timeout=25)
-    except Exception as e:
-        print(f"AVISO detalle item {item_id}:", e)
-        return None
 
 
 def _categoria_para_diversidad(producto):
@@ -660,8 +671,6 @@ def _puntaje_producto_demanda(producto):
     if m:
         puntos += int(m.group(1)) * 2
 
-    if producto.get("cuotas"):
-        puntos += 20
     if producto.get("precio") and producto.get("precio") != "Precio no disponible":
         puntos += 10
     if producto.get("imagen_url"):
@@ -713,7 +722,7 @@ def _seleccionar_tanda_diversa(candidatos, cantidad):
 
 
 def obtener_productos_base():
-    print("--- BUSCANDO 10 PRODUCTOS NUEVOS VÍA API OFICIAL DE MERCADO LIBRE ---")
+    print("--- BUSCANDO 10 PRODUCTOS NUEVOS (DETECCIÓN DE IDs + VALIDACIÓN API /items) ---")
     token = os.getenv("MELI_ACCESS_TOKEN", "").strip() or MELI_ACCESS_TOKEN
     print("Token Mercado Libre presente:", "SÍ" if token else "NO")
 
@@ -721,55 +730,54 @@ def obtener_productos_base():
     print("Publicaciones ya usadas en el historial:", len(historial))
 
     nuevos = {}
-    consultas = _consultas_ampliadas()
     OBJETIVO_POOL = max(CANTIDAD_PRODUCTOS * 2, 20)
 
-    for consulta in consultas:
+    urls_fuente = [URL_OFERTAS, URL_MAS_VENDIDOS] + [
+        _url_busqueda_ml(c) for c in _consultas_ampliadas()
+    ]
+
+    ids_evaluados = set()
+
+    for url in urls_fuente:
         if len(nuevos) >= OBJETIVO_POOL:
             break
 
-        for solo_ofertas in (True, False):
+        ids_pagina = _descubrir_item_ids_en_url(url)
+        ids_nuevos = [
+            iid for iid in ids_pagina
+            if iid not in historial and iid not in nuevos and iid not in ids_evaluados
+        ]
+        if not ids_nuevos:
+            continue
+
+        print(f"IDs detectados en {url}: {len(ids_pagina)} | Nuevos a consultar en API: {len(ids_nuevos)}")
+        ids_evaluados.update(ids_nuevos)
+
+        # Consultamos en lotes de 20 vía API /items
+        items_api = _obtener_items_multiget_api(ids_nuevos[:40])
+        for item_json in items_api:
             if len(nuevos) >= OBJETIVO_POOL:
                 break
 
-            try:
-                resultados = _buscar_items_api(consulta, offset=0, limit=25, solo_ofertas=solo_ofertas)
-            except Exception as e:
-                print(f"AVISO API búsqueda '{consulta}' (ofertas={solo_ofertas}):", e)
+            producto = _construir_producto_desde_item_api(item_json)
+            if not producto:
                 continue
 
-            if not resultados:
+            if not es_producto_permitido(producto):
+                print("DESCARTADO por filtro (alcohol):", producto.get("nombre", ""))
                 continue
 
-            for raw in resultados:
-                if len(nuevos) >= OBJETIVO_POOL:
-                    break
-
-                item_id = limpiar_texto(raw.get("id", "")).upper()
-                if not item_id or item_id in historial or item_id in nuevos:
-                    continue
-                if not re.fullmatch(r"MLA\d{7,}", item_id):
-                    continue
-
-                detalle = _obtener_detalle_item_api(item_id)
-                producto = _construir_producto_desde_api(raw, detalle)
-                if not producto:
-                    continue
-
-                if not es_producto_permitido(producto):
-                    print("DESCARTADO por filtro (alcohol):", producto.get("nombre", ""))
-                    continue
-
-                nuevos[item_id] = producto
-                print(
-                    f"CANDIDATO VÁLIDO {len(nuevos)}:",
-                    item_id, "|", _categoria_para_diversidad(producto), "|",
-                    producto["nombre"], "| precio=", producto["precio"]
-                )
+            item_id = producto["item_id"]
+            nuevos[item_id] = producto
+            print(
+                f"CANDIDATO VÁLIDO {len(nuevos)}:",
+                item_id, "|", _categoria_para_diversidad(producto), "|",
+                producto["nombre"], "| precio=", producto["precio"]
+            )
 
     if len(nuevos) < CANTIDAD_PRODUCTOS:
         raise RuntimeError(
-            f"Solo se consiguieron {len(nuevos)} productos nuevos completos vía API. "
+            f"Solo se consiguieron {len(nuevos)} productos nuevos completos. "
             f"Se necesitan {CANTIDAD_PRODUCTOS}. El historial NO fue borrado ni se usaron repetidos."
         )
 
@@ -825,19 +833,17 @@ def obtener_productos_demanda(maximo=10):
     for necesidad in pendientes:
         if len(elegidos) >= maximo:
             break
-        try:
-            resultados = _buscar_items_api(necesidad["consulta"], offset=0, limit=15, solo_ofertas=False)
-        except Exception as e:
-            print("AVISO demanda API:", necesidad["consulta"], "|", e)
+
+        url_busqueda = _url_busqueda_ml(necesidad["consulta"])
+        ids_pagina = _descubrir_item_ids_en_url(url_busqueda)
+        ids_nuevos = [iid for iid in ids_pagina if iid not in historial and iid not in ids]
+        if not ids_nuevos:
             continue
 
+        items_api = _obtener_items_multiget_api(ids_nuevos[:20])
         candidatos = []
-        for raw in resultados:
-            item_id = limpiar_texto(raw.get("id", "")).upper()
-            if not item_id or item_id in historial or item_id in ids:
-                continue
-            detalle = _obtener_detalle_item_api(item_id)
-            prod = _construir_producto_desde_api(raw, detalle)
+        for item_json in items_api:
+            prod = _construir_producto_desde_item_api(item_json)
             if prod and es_producto_permitido(prod):
                 prod["consulta_demanda"] = necesidad["consulta"]
                 prod["origen_demanda"] = necesidad.get("origen", "")
